@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
+import type { Session } from '@supabase/supabase-js'
 import {
   Home,
   Search,
@@ -31,6 +32,11 @@ import {
   Plus,
   Minus,
   AlertTriangle,
+  LogOut,
+  Mail,
+  Eye,
+  EyeOff,
+  MessageSquare,
 } from 'lucide-react'
 
 type Post = {
@@ -46,6 +52,7 @@ type Post = {
   user_urls?: string[]
   bio?: string
   likes_count?: number
+  user_id?: string
 }
 
 type Comment = {
@@ -77,6 +84,20 @@ type UserProfileView = {
   user_urls?: string[]
   bio?: string
 }
+
+type ChatMessage = {
+  id: number
+  created_at: string
+  sender_nickname: string
+  recipient_nickname: string
+  sender_id?: string
+  content: string
+  image_url?: string
+}
+
+const CHAT_IMAGE_MARKER = 'IMAGE:'
+
+const CONTACT_EMAIL = 'madocomi.official@gmail.com'
 
 const QUALIFICATION_OPTIONS = [
   '一級建築士',
@@ -184,7 +205,7 @@ function AvatarIcon({
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'home' | 'search' | 'favorites' | 'mypage'>('home')
+  const [activeTab, setActiveTab] = useState<'home' | 'search' | 'messages' | 'favorites' | 'mypage'>('home')
   const [posts, setPosts] = useState<Post[]>([])
   const [filteredPosts, setFilteredPosts] = useState<Post[]>([])
   const [likedPostIds, setLikedPostIds] = useState<number[]>([])
@@ -199,9 +220,33 @@ export default function App() {
   const [selectedPost, setSelectedPost] = useState<Post | null>(null)
 
   const [viewUserProfile, setViewUserProfile] = useState<UserProfileView | null>(null)
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [selectedChatNick, setSelectedChatNick] = useState<string | null>(null)
+  const [chatInput, setChatInput] = useState('')
+  const [chatImageFile, setChatImageFile] = useState<File | null>(null)
+  const [chatImagePreview, setChatImagePreview] = useState<string | null>(null)
+  const [sendingChat, setSendingChat] = useState(false)
+
+  const [session, setSession] = useState<Session | null>(null)
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [showAuthPassword, setShowAuthPassword] = useState(false)
+  const [authSubmitting, setAuthSubmitting] = useState(false)
+  const [authMessage, setAuthMessage] = useState('')
+  const [authNoticeKind, setAuthNoticeKind] = useState<'success' | 'warning'>('success')
+  const [canResendSignupEmail, setCanResendSignupEmail] = useState(false)
+  const [resendingSignupEmail, setResendingSignupEmail] = useState(false)
+  const [contactName, setContactName] = useState('')
+  const [contactEmail, setContactEmail] = useState('')
+  const [contactMessage, setContactMessage] = useState('')
+  const [contactNotice, setContactNotice] = useState('')
+  const [showProfileEdit, setShowProfileEdit] = useState(false)
+  const [showQualApply, setShowQualApply] = useState(false)
+  const [showContactForm, setShowContactForm] = useState(false)
 
   // プロフィール状態
-  const [nickname, setNickname] = useState('けん')
+  const [nickname, setNickname] = useState('')
   const [avatarUrl, setAvatarUrl] = useState<string>('')
   const [bio, setBio] = useState<string>('')
   const [userUrls, setUserUrls] = useState<string[]>([''])
@@ -230,35 +275,296 @@ export default function App() {
   const [searchFloors, setSearchFloors] = useState('すべて')
 
   useEffect(() => {
-    fetchUserProfile()
-    fetchPosts()
+    fetchPosts(null)
     fetchQualifications()
     fetchComments()
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      setSession(nextSession)
+
+      if (typeof window !== 'undefined' && window.location.hash) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      }
+
+      // onAuthStateChange 内で直接別の Auth API を呼ぶと固まるため、処理を後ろに回す
+      window.setTimeout(() => {
+        if (nextSession?.user) {
+          if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+            fetchUserProfile(nextSession.user)
+          }
+        } else {
+          resetLocalProfile()
+          if (event === 'SIGNED_OUT') {
+            fetchPosts(null)
+          }
+        }
+      }, 0)
+    })
+
+    return () => {
+      subscription.unsubscribe()
+    }
   }, [])
 
   useEffect(() => {
     applyFilter()
   }, [posts, searchDocType, searchLayout, searchFloors])
 
-  const fetchUserProfile = async () => {
-    const savedNick = localStorage.getItem('my_nickname') || 'けん'
-    setNickname(savedNick)
+  useEffect(() => {
+    if (session?.user?.email && !contactEmail) {
+      setContactEmail(session.user.email)
+    }
+  }, [session, contactEmail])
 
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('nickname', savedNick)
-      .single()
+  useEffect(() => {
+    if (activeTab !== 'mypage') {
+      setShowProfileEdit(false)
+      setShowQualApply(false)
+      setShowContactForm(false)
+    }
+  }, [activeTab])
 
-    if (!error && data) {
-      if (data.avatar_url) setAvatarUrl(data.avatar_url)
-      if (data.bio) setBio(data.bio)
-      if (data.user_urls && Array.isArray(data.user_urls) && data.user_urls.length > 0) {
-        setUserUrls(data.user_urls)
-      } else if (data.user_url) {
-        setUserUrls([data.user_url])
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!authEmail.trim() || !authPassword) {
+      return alert('メールアドレスとパスワードを入力してください')
+    }
+    if (authPassword.length < 6) {
+      return alert('パスワードは6文字以上にしてください')
+    }
+
+    setAuthSubmitting(true)
+    setAuthMessage('')
+    setCanResendSignupEmail(false)
+
+    try {
+      if (authMode === 'signup') {
+        const signupEmail = authEmail.trim()
+        const { data, error } = await supabase.auth.signUp({
+          email: signupEmail,
+          password: authPassword,
+          options: {
+            emailRedirectTo: window.location.origin,
+          },
+        })
+        if (error) throw error
+
+        if (!data.user) {
+          throw new Error(
+            '会員登録に失敗しました。Supabase の Authentication でメール登録が有効か、同じプロジェクトを開いているか確認してください。'
+          )
+        }
+
+        const alreadyRegistered = Array.isArray(data.user.identities) && data.user.identities.length === 0
+
+        if (alreadyRegistered) {
+          setAuthMode('login')
+          setAuthNoticeKind('warning')
+          setAuthMessage('このメールアドレスは登録済みです。ログインしてください。確認メールは再送されません。')
+          setAuthPassword('')
+          return
+        }
+
+        resetLocalProfile()
+
+        if (data.session) {
+          setAuthNoticeKind('success')
+          setAuthMessage('会員登録が完了し、ログインしました。マイページでプロフィールを設定してください。')
+        } else {
+          const sentMessage = `${signupEmail} に認証メールを送付しました。メール内のリンクから登録を完了してください。`
+          setAuthNoticeKind('success')
+          setAuthMessage(sentMessage)
+          setCanResendSignupEmail(true)
+          alert(sentMessage)
+        }
+        setAuthPassword('')
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword,
+        })
+        if (error) throw error
+        setAuthPassword('')
+        setAuthNoticeKind('success')
+        setAuthMessage('ログインしました。')
+      }
+    } catch (error: any) {
+      const raw = error?.message || '不明なエラーです'
+      const friendly =
+        raw.includes('Error sending confirmation email') || raw.includes('sending confirmation email')
+          ? '確認メールを送れなかったため、会員登録できませんでした。Supabase の Authentication → Sign In / Providers で Confirm email をいったん OFF にするか、メール送信用の SMTP を設定してください。'
+          : raw
+      alert('認証エラー: ' + friendly)
+    } finally {
+      setAuthSubmitting(false)
+    }
+  }
+
+  const handleSignOut = async () => {
+    const { error } = await supabase.auth.signOut()
+    if (error) {
+      alert('ログアウトエラー: ' + error.message)
+      return
+    }
+    setAuthEmail('')
+    setAuthPassword('')
+    setAuthNoticeKind('success')
+    setAuthMessage('ログアウトしました。')
+    setCanResendSignupEmail(false)
+    resetLocalProfile()
+  }
+
+  const openContactMailto = (name: string, email: string, message: string) => {
+    const subject = encodeURIComponent('【お問い合わせ】マドコミ')
+    const body = encodeURIComponent(`お名前: ${name}\nメール: ${email}\n\n${message}`)
+    window.location.href = `mailto:${CONTACT_EMAIL}?subject=${subject}&body=${body}`
+  }
+
+  const handleContactSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const name = contactName.trim()
+    const email = contactEmail.trim()
+    const message = contactMessage.trim()
+
+    if (!name || !email || !message) {
+      return alert('お名前・メールアドレス・お問い合わせ内容を入力してください')
+    }
+
+    openContactMailto(name, email, message)
+    setContactNotice('メールアプリが開きます。宛先と本文が入っているので、送信してください。')
+  }
+
+  const handleResendSignupEmail = async () => {
+    if (!authEmail.trim()) return alert('メールアドレスを入力してください')
+    setResendingSignupEmail(true)
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: authEmail.trim(),
+        options: {
+          emailRedirectTo: window.location.origin,
+        },
+      })
+      if (error) throw error
+      const sentMessage = `${authEmail.trim()} に認証メールを再送しました。届かない場合は迷惑メールフォルダも確認してください。`
+      setAuthNoticeKind('success')
+      setAuthMessage(sentMessage)
+      alert(sentMessage)
+    } catch (error: any) {
+      alert('再送エラー: ' + error.message)
+    } finally {
+      setResendingSignupEmail(false)
+    }
+  }
+
+  const requireLogin = () => {
+    setAuthMode('login')
+    setAuthNoticeKind('warning')
+    setAuthMessage('この操作にはログインが必要です。メールアドレスでログインまたは会員登録してください。')
+    setActiveTab('mypage')
+    alert('ログインまたは会員登録が必要です。')
+  }
+
+  const goToHome = () => {
+    setActiveTab('home')
+    window.setTimeout(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+    }, 0)
+  }
+
+  const goToSearch = () => {
+    setActiveTab('search')
+    window.setTimeout(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+    }, 0)
+  }
+
+  const goToMessages = () => {
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
+    setSelectedChatNick(null)
+    setActiveTab('messages')
+    fetchMessages()
+    window.setTimeout(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+    }, 0)
+  }
+
+  const resetLocalProfile = () => {
+    setNickname('')
+    setAvatarUrl('')
+    setBio('')
+    setUserUrls([''])
+    setLikedPostIds([])
+    setChatMessages([])
+    setSelectedChatNick(null)
+    setChatImageFile(null)
+    setChatImagePreview(null)
+  }
+
+  const applyUserRow = (data: any) => {
+    if (data.nickname) setNickname(data.nickname)
+    setAvatarUrl(data.avatar_url || '')
+    setBio(data.bio || '')
+    if (data.user_urls && Array.isArray(data.user_urls) && data.user_urls.length > 0) {
+      setUserUrls(data.user_urls)
+    } else if (data.user_url) {
+      setUserUrls([data.user_url])
+    } else {
+      setUserUrls([''])
+    }
+  }
+
+  const fetchUserProfile = async (authUser: Session['user']) => {
+    const tryFindBy = async (column: string, value: string) => {
+      const { data, error } = await supabase.from('users').select('*').eq(column, value).maybeSingle()
+      if (error || !data) return null
+      return data
+    }
+
+    const belongsToThisUser = (row: any) => {
+      if (row.user_id && row.user_id === authUser.id) return true
+      if (row.email && authUser.email && row.email === authUser.email) return true
+      if (!row.user_id && !row.email) return true
+      return false
+    }
+
+    let row =
+      (await tryFindBy('user_id', authUser.id)) ||
+      (authUser.email ? await tryFindBy('email', authUser.email) : null)
+
+    const metaNick = (authUser.user_metadata?.nickname as string | undefined)?.trim() || ''
+
+    if (!row && metaNick) {
+      const byNick = await tryFindBy('nickname', metaNick)
+      if (byNick && belongsToThisUser(byNick)) {
+        row = byNick
       }
     }
+
+    if (row && belongsToThisUser(row)) {
+      applyUserRow(row)
+      fetchPosts(authUser, row.nickname)
+      fetchMessages(row.nickname)
+      return
+    }
+
+    if (metaNick) {
+      setNickname(metaNick)
+      setAvatarUrl('')
+      setBio('')
+      setUserUrls([''])
+      fetchPosts(authUser, metaNick)
+      fetchMessages(metaNick)
+      return
+    }
+
+    resetLocalProfile()
+    fetchPosts(authUser, '')
   }
 
   const handleUrlChange = (index: number, value: string) => {
@@ -282,29 +588,44 @@ export default function App() {
   }
 
   const handleSaveProfile = async () => {
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
     if (!nickname.trim()) return alert('ニックネームを入力してください')
     setSavingProfile(true)
 
     const filteredUrls = userUrls.map((u) => u.trim()).filter(Boolean).slice(0, 3)
+    const trimmedNick = nickname.trim()
 
     try {
-      localStorage.setItem('my_nickname', nickname.trim())
+      const baseRow = {
+        nickname: trimmedNick,
+        avatar_url: avatarUrl,
+        bio: bio.trim(),
+        user_urls: filteredUrls,
+        updated_at: new Date().toISOString(),
+      }
 
       const { error } = await supabase.from('users').upsert([
         {
-          nickname: nickname.trim(),
-          avatar_url: avatarUrl,
-          bio: bio.trim(),
-          user_urls: filteredUrls,
-          updated_at: new Date().toISOString(),
+          ...baseRow,
+          email: session.user.email,
+          user_id: session.user.id,
         },
       ])
 
-      if (error) throw error
+      if (error) {
+        const { error: fallbackError } = await supabase.from('users').upsert([baseRow])
+        if (fallbackError) throw fallbackError
+      }
+
+      await supabase.auth.updateUser({ data: { nickname: trimmedNick } })
 
       alert('プロフィール情報を保存しました！')
-      fetchPosts()
+      fetchPosts(session.user, trimmedNick)
       fetchComments()
+      fetchMessages(trimmedNick)
     } catch (error: any) {
       alert('保存エラー: ' + error.message)
     } finally {
@@ -323,14 +644,14 @@ export default function App() {
     }
   }
 
-  const fetchPosts = async () => {
+  const fetchPosts = async (authUser?: Session['user'] | null, userNick?: string) => {
     const { data: postsData, error: postsError } = await supabase
       .from('posts')
       .select('*')
       .order('id', { ascending: false })
 
     const { data: usersData } = await supabase.from('users').select('*')
-    const { data: likesData } = await supabase.from('likes').select('post_id')
+    const { data: likesData } = await supabase.from('likes').select('*')
 
     if (postsError) return
 
@@ -343,11 +664,20 @@ export default function App() {
 
     const likeCounts: { [key: number]: number } = {}
     const userLikedIds: number[] = []
+    const currentNick = userNick ?? nickname
 
     if (likesData) {
-      likesData.forEach((like) => {
+      likesData.forEach((like: any) => {
         likeCounts[like.post_id] = (likeCounts[like.post_id] || 0) + 1
-        if (!userLikedIds.includes(like.post_id)) {
+
+        if (!authUser) return
+
+        const isMine =
+          (like.user_id && like.user_id === authUser.id) ||
+          (like.user_email && like.user_email === authUser.email) ||
+          (!like.user_id && !like.user_email && currentNick && like.nickname === currentNick)
+
+        if (isMine && !userLikedIds.includes(like.post_id)) {
           userLikedIds.push(like.post_id)
         }
       })
@@ -408,6 +738,156 @@ export default function App() {
     }
   }
 
+  const fetchMessages = async (myNick = nickname) => {
+    if (!myNick.trim()) {
+      setChatMessages([])
+      return
+    }
+
+    const { data: sent, error: sentError } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('sender_nickname', myNick.trim())
+
+    const { data: received, error: receivedError } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('recipient_nickname', myNick.trim())
+
+    if (sentError || receivedError) {
+      const err = sentError || receivedError
+      if (err?.message?.includes('Could not find the table') || err?.code === '42P01' || err?.message?.includes('schema cache')) {
+        console.warn('messages テーブルがありません')
+      }
+      setChatMessages([])
+      return
+    }
+
+    const merged = [...(sent || []), ...(received || [])]
+    const unique = new Map<number, ChatMessage>()
+    merged.forEach((m) => unique.set(m.id, m))
+    const list = Array.from(unique.values())
+      .map((m) => {
+        let image_url = m.image_url
+        let content = m.content || ''
+        if (!image_url && content.includes(CHAT_IMAGE_MARKER)) {
+          const idx = content.lastIndexOf(CHAT_IMAGE_MARKER)
+          image_url = content.slice(idx + CHAT_IMAGE_MARKER.length).trim()
+          content = content.slice(0, idx).trim()
+        }
+        return { ...m, content, image_url }
+      })
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    setChatMessages(list)
+  }
+
+  const openChatWith = (targetNick: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation()
+      e.preventDefault()
+    }
+
+    setViewUserProfile(null)
+    setSelectedPost(null)
+
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
+    if (!nickname.trim()) {
+      setActiveTab('mypage')
+      setShowProfileEdit(true)
+      alert('メッセージを送るには、マイページでニックネームを保存してください')
+      return
+    }
+    if (targetNick.trim() === nickname.trim()) {
+      alert('自分自身にはメッセージを送れません。別のアカウントのプロフィールから送ってください。')
+      return
+    }
+
+    setSelectedChatNick(targetNick.trim())
+    setActiveTab('messages')
+    fetchMessages(nickname.trim())
+  }
+
+  const handleSendChat = async () => {
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
+    if (!nickname.trim()) {
+      return alert('マイページでニックネームを保存してください')
+    }
+    if (!selectedChatNick) return
+    const text = chatInput.trim()
+    if (!text && !chatImageFile) return
+
+    setSendingChat(true)
+    try {
+      let imageUrl = ''
+      if (chatImageFile) {
+        const fileExt = chatImageFile.name.split('.').pop()
+        const fileName = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${fileExt}`
+        const { error: uploadError } = await supabase.storage.from('floor-plans').upload(fileName, chatImageFile)
+        if (uploadError) throw uploadError
+        const { data: publicUrlData } = supabase.storage.from('floor-plans').getPublicUrl(fileName)
+        imageUrl = publicUrlData.publicUrl
+      }
+
+      const payload: Record<string, string> = {
+        sender_nickname: nickname.trim(),
+        recipient_nickname: selectedChatNick,
+        sender_id: session.user.id,
+        content: text || (imageUrl ? '（画像）' : ''),
+      }
+      if (imageUrl) payload.image_url = imageUrl
+
+      let { error } = await supabase.from('messages').insert([payload])
+      if (error) {
+        const { sender_id: _sid, image_url: _img, ...withoutExtra } = payload
+        const fallbackContent = imageUrl
+          ? `${withoutExtra.content || ''}\n${CHAT_IMAGE_MARKER}${imageUrl}`.trim()
+          : withoutExtra.content
+        const retry = await supabase.from('messages').insert([
+          {
+            ...withoutExtra,
+            content: fallbackContent,
+          },
+        ])
+        error = retry.error
+      }
+      if (error) {
+        if (
+          error.message.includes('Could not find the table') ||
+          error.code === '42P01' ||
+          error.message.includes('schema cache') ||
+          error.message.includes('does not exist')
+        ) {
+          throw new Error(
+            'メッセージ用テーブルがありません。Supabase の SQL Editor で messages テーブルを作成してください。'
+          )
+        }
+        throw error
+      }
+      setChatInput('')
+      setChatImageFile(null)
+      setChatImagePreview(null)
+      await fetchMessages(nickname.trim())
+    } catch (error: any) {
+      alert('送信エラー: ' + error.message)
+    } finally {
+      setSendingChat(false)
+    }
+  }
+
+  const handleChatImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return
+    const file = e.target.files[0]
+    setChatImageFile(file)
+    setChatImagePreview(URL.createObjectURL(file))
+    e.target.value = ''
+  }
+
   const applyFilter = () => {
     let result = [...posts]
 
@@ -427,15 +907,48 @@ export default function App() {
   const handleToggleLike = async (postId: number, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
 
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
+
     const isLiked = likedPostIds.includes(postId)
 
     if (isLiked) {
-      await supabase.from('likes').delete().eq('post_id', postId)
+      const { error } = await supabase
+        .from('likes')
+        .delete()
+        .eq('post_id', postId)
+        .eq('user_id', session.user.id)
+
+      if (error) {
+        await supabase.from('likes').delete().eq('post_id', postId).eq('nickname', nickname)
+      }
     } else {
-      await supabase.from('likes').insert([{ post_id: postId }])
+      const { error } = await supabase.from('likes').insert([
+        {
+          post_id: postId,
+          user_id: session.user.id,
+          user_email: session.user.email,
+          nickname: nickname,
+        },
+      ])
+
+      if (error) {
+        const { error: fallbackError } = await supabase.from('likes').insert([
+          {
+            post_id: postId,
+            nickname: nickname,
+          },
+        ])
+        if (fallbackError) {
+          alert('いいねの保存に失敗しました: ' + fallbackError.message)
+          return
+        }
+      }
     }
 
-    fetchPosts()
+    fetchPosts(session.user, nickname)
   }
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -448,6 +961,10 @@ export default function App() {
   }
 
   const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
     if (!e.target.files || e.target.files.length === 0) return
     const file = e.target.files[0]
     setUploadingAvatar(true)
@@ -482,7 +999,7 @@ export default function App() {
       ])
 
       alert('プロフィール画像を更新・保存しました！')
-      fetchPosts()
+      fetchPosts(session.user, nickname)
       fetchComments()
     } catch (error: any) {
       alert('画像アップロードエラー: ' + error.message)
@@ -500,12 +1017,24 @@ export default function App() {
 
   // 投稿ボタンが押された時の処理（まず確認モーダルを表示）
   const handleOpenPrivacyConfirm = () => {
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
+    if (!nickname.trim()) {
+      setActiveTab('mypage')
+      return alert('投稿するには、マイページでニックネームを設定してください')
+    }
     if (selectedFiles.length === 0) return alert('画像を少なくとも1枚選択してください')
     setShowPrivacyConfirm(true)
   }
 
   // 確認後に実際にアップロードを実行する関数
   const handleUpload = async () => {
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
     setShowPrivacyConfirm(false)
     setUploading(true)
 
@@ -531,28 +1060,34 @@ export default function App() {
 
       const filteredUrls = userUrls.map((u) => u.trim()).filter(Boolean).slice(0, 3)
 
-      const { error: insertError } = await supabase.from('posts').insert([
-        {
-          image_urls: uploadedUrls,
-          image_url: uploadedUrls[0],
-          doc_type: docType,
-          layout: layout,
-          floors: floors,
-          comment: comment,
-          nickname: nickname,
-          avatar_url: avatarUrl,
-          bio: bio,
-          user_urls: filteredUrls,
-        },
-      ])
+      const postPayload = {
+        image_urls: uploadedUrls,
+        image_url: uploadedUrls[0],
+        doc_type: docType,
+        layout: layout,
+        floors: floors,
+        comment: comment,
+        nickname: nickname,
+        avatar_url: avatarUrl,
+        bio: bio,
+        user_urls: filteredUrls,
+        user_id: session.user.id,
+        user_email: session.user.email,
+      }
 
-      if (insertError) throw insertError
+      const { error: insertError } = await supabase.from('posts').insert([postPayload])
+
+      if (insertError) {
+        const { user_id: _uid, user_email: _email, ...withoutAuthCols } = postPayload
+        const { error: fallbackError } = await supabase.from('posts').insert([withoutAuthCols])
+        if (fallbackError) throw fallbackError
+      }
 
       setSelectedFiles([])
       setPreviewUrls([])
       setComment('')
       alert('投稿が完了しました！')
-      fetchPosts()
+      fetchPosts(session.user, nickname)
     } catch (error: any) {
       alert('投稿エラー: ' + error.message)
     } finally {
@@ -592,13 +1127,17 @@ export default function App() {
       if (selectedPost?.id === postId) {
         setSelectedPost(null)
       }
-      fetchPosts()
+      fetchPosts(session?.user ?? null, nickname)
     } catch (error: any) {
       alert('削除エラー: ' + error.message)
     }
   }
 
   const handleCommentReaction = (commentId: number, type: 'like' | 'dislike') => {
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
     const isLiked = likedCommentIds.includes(commentId)
     const isDisliked = dislikedCommentIds.includes(commentId)
 
@@ -620,6 +1159,14 @@ export default function App() {
   }
 
   const handleAddModalComment = async (postId: number) => {
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
+    if (!nickname.trim()) {
+      setActiveTab('mypage')
+      return alert('コメントするには、マイページでニックネームを設定してください')
+    }
     if (!modalCommentInput || !modalCommentInput.trim()) return
 
     try {
@@ -661,6 +1208,10 @@ export default function App() {
   }
 
   const handleApplyQualification = async () => {
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
     if (!nickname.trim()) return alert('ニックネームを入力してください')
     if (!certFile) return alert('資格証の写真をアップロードしてください')
 
@@ -734,7 +1285,10 @@ export default function App() {
   const myPendingQuals = allUserQuals.filter((q) => q.nickname === nickname && q.status === 'pending')
 
   const favoritePosts = posts.filter((post) => likedPostIds.includes(post.id))
-  const myPosts = posts.filter((post) => post.nickname === nickname)
+  const myPosts = posts.filter((post) => {
+    if (session?.user && post.user_id && post.user_id === session.user.id) return true
+    return !!nickname && post.nickname === nickname
+  })
 
   const renderCommentBox = (c: Comment, isChild = false) => {
     const quals = getApprovedQualsForUser(c.nickname)
@@ -825,8 +1379,21 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20 text-slate-800">
-      <header className="sticky top-0 z-10 bg-white border-b border-slate-200 px-4 py-3 shadow-sm text-center flex justify-between items-center">
-        <h1 className="text-lg font-bold text-slate-800 mx-auto">間取り相談掲示板</h1>
+      <header className="sticky top-0 z-10 bg-white border-b border-slate-200 px-4 py-3 shadow-sm flex justify-between items-center gap-2">
+        <h1 className="text-sm sm:text-base font-bold text-slate-800 leading-tight">Madori Community：マドコミ</h1>
+        {session?.user?.email ? (
+          <span className="text-[11px] text-slate-500 truncate max-w-[45%] text-right">
+            {session.user.email}
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setActiveTab('mypage')}
+            className="text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer shrink-0"
+          >
+            ログイン
+          </button>
+        )}
       </header>
 
       <main className="max-w-lg mx-auto p-4">
@@ -1130,10 +1697,14 @@ export default function App() {
                     <div className="p-3 space-y-2">
                       {post.comment && <p className="text-sm text-slate-700 line-clamp-2">{post.comment}</p>}
                       <div className="flex items-center gap-4 text-xs text-slate-500 pt-1">
-                        <span className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={(e) => handleToggleLike(post.id, e)}
+                          className="flex items-center gap-1 font-medium hover:text-red-500 cursor-pointer"
+                        >
                           <Heart className={`w-4 h-4 ${isLiked ? 'text-red-500 fill-red-500' : ''}`} />
                           {post.likes_count || 0}
-                        </span>
+                        </button>
                         <span className="flex items-center gap-1">
                           <MessageCircle className="w-4 h-4" />
                           {postComments.length}
@@ -1155,7 +1726,18 @@ export default function App() {
               お気に入りした投稿 ({favoritePosts.length})
             </h2>
 
-            {favoritePosts.length === 0 ? (
+            {!session?.user ? (
+              <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm text-center text-slate-500 space-y-3">
+                <p className="text-sm">お気に入りを見るにはログインが必要です。</p>
+                <button
+                  type="button"
+                  onClick={requireLogin}
+                  className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
+                >
+                  ログイン / 会員登録へ
+                </button>
+              </div>
+            ) : favoritePosts.length === 0 ? (
               <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm text-center text-slate-400">
                 <p className="text-sm">お気に入り登録した投稿はまだありません。</p>
               </div>
@@ -1179,9 +1761,291 @@ export default function App() {
           </div>
         )}
 
+        {/* メッセージタブ */}
+        {activeTab === 'messages' && (
+          <div className="space-y-3">
+            <h2 className="font-bold text-base text-slate-700 flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-indigo-600" />
+              メッセージ
+            </h2>
+
+            {!session?.user ? (
+              <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm text-center text-slate-500 space-y-3">
+                <p className="text-sm">メッセージを見るにはログインが必要です。</p>
+                <button
+                  type="button"
+                  onClick={requireLogin}
+                  className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
+                >
+                  ログイン / 会員登録へ
+                </button>
+              </div>
+            ) : !nickname.trim() ? (
+              <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm text-center text-slate-500 space-y-3">
+                <p className="text-sm">ニックネームを設定するとメッセージを使えます。</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('mypage')
+                    setShowProfileEdit(true)
+                  }}
+                  className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
+                >
+                  マイページで設定する
+                </button>
+              </div>
+            ) : selectedChatNick ? (
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-[60vh]">
+                <div className="p-3 border-b border-slate-100 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedChatNick(null)}
+                    className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
+                  >
+                    ← 一覧
+                  </button>
+                  <p className="font-bold text-sm text-slate-800 truncate">{selectedChatNick}</p>
+                </div>
+                <div className="flex-1 p-3 space-y-2 overflow-y-auto max-h-[50vh] bg-slate-50">
+                  {chatMessages
+                    .filter(
+                      (m) =>
+                        (m.sender_nickname === nickname && m.recipient_nickname === selectedChatNick) ||
+                        (m.sender_nickname === selectedChatNick && m.recipient_nickname === nickname)
+                    )
+                    .map((m) => {
+                      const mine = m.sender_nickname === nickname
+                      return (
+                        <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                          <div
+                            className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs ${
+                              mine ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-800'
+                            }`}
+                          >
+                            {m.image_url && (
+                              <a href={m.image_url} target="_blank" rel="noopener noreferrer" className="block mb-1.5">
+                                <img
+                                  src={m.image_url}
+                                  alt="送信画像"
+                                  className="max-h-48 w-full object-contain rounded-lg bg-black/10"
+                                />
+                              </a>
+                            )}
+                            {m.content && m.content !== '（画像）' && (
+                              <p className="whitespace-pre-wrap">{m.content}</p>
+                            )}
+                            <p className={`text-[10px] mt-1 ${mine ? 'text-indigo-100' : 'text-slate-400'}`}>
+                              {new Date(m.created_at).toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+                      )
+                    })}
+                </div>
+                <div className="p-3 border-t border-slate-100 space-y-2 bg-white">
+                  {chatImagePreview && (
+                    <div className="relative w-20 h-20">
+                      <img src={chatImagePreview} alt="送信前プレビュー" className="w-20 h-20 object-cover rounded-lg border border-slate-200" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setChatImageFile(null)
+                          setChatImagePreview(null)
+                        }}
+                        className="absolute -top-1.5 -right-1.5 bg-slate-800 text-white rounded-full p-0.5 cursor-pointer"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
+                  <div className="flex gap-2 items-center">
+                    <label className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg cursor-pointer shrink-0">
+                      <ImageIcon className="w-5 h-5" />
+                      <input type="file" accept="image/*" onChange={handleChatImageChange} className="hidden" />
+                    </label>
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="メッセージを入力..."
+                    className="flex-1 p-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSendChat()
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSendChat}
+                    disabled={sendingChat}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg cursor-pointer disabled:opacity-50"
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {(() => {
+                  const me = nickname.trim()
+                  const threads = new Map<string, ChatMessage>()
+                  chatMessages.forEach((m) => {
+                    const other = m.sender_nickname === me ? m.recipient_nickname : m.sender_nickname
+                    const prev = threads.get(other)
+                    if (!prev || new Date(m.created_at) > new Date(prev.created_at)) {
+                      threads.set(other, m)
+                    }
+                  })
+                  const list = Array.from(threads.entries()).sort(
+                    (a, b) => new Date(b[1].created_at).getTime() - new Date(a[1].created_at).getTime()
+                  )
+
+                  if (list.length === 0) {
+                    return (
+                      <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm text-center text-slate-400">
+                        <p className="text-sm">まだメッセージはありません。</p>
+                        <p className="text-xs mt-2">コメント投稿者のプロフィールから送れます。</p>
+                      </div>
+                    )
+                  }
+
+                  return list.map(([other, last]) => (
+                    <button
+                      key={other}
+                      type="button"
+                      onClick={() => setSelectedChatNick(other)}
+                      className="w-full text-left bg-white p-3 rounded-xl border border-slate-200 shadow-sm hover:border-slate-300 cursor-pointer"
+                    >
+                      <p className="font-bold text-sm text-slate-800">{other}</p>
+                      <p className="text-xs text-slate-500 truncate mt-0.5">
+                        {last.image_url || last.content?.includes('IMAGE:') ? '画像' : last.content}
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        {new Date(last.created_at).toLocaleString()}
+                      </p>
+                    </button>
+                  ))
+                })()}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* マイページタブ */}
         {activeTab === 'mypage' && (
           <div className="space-y-4">
+            {!session?.user && (
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
+              <h2 className="font-bold text-base text-slate-700 flex items-center gap-2">
+                <Mail className="w-5 h-5 text-indigo-600" />
+                会員登録・ログイン
+              </h2>
+
+              <form onSubmit={handleAuthSubmit} className="space-y-3">
+                  <div className="flex rounded-lg overflow-hidden border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode('login')
+                        setAuthMessage('')
+                      }}
+                      className={`flex-1 py-2 text-xs font-bold cursor-pointer ${
+                        authMode === 'login'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-white text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      ログイン
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode('signup')
+                        setAuthMessage('')
+                      }}
+                      className={`flex-1 py-2 text-xs font-bold cursor-pointer ${
+                        authMode === 'signup'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-white text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      会員登録
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">メールアドレス</label>
+                    <input
+                      type="email"
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      autoComplete="email"
+                      className="w-full p-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">パスワード（6文字以上）</label>
+                    <div className="relative">
+                      <input
+                        type={showAuthPassword ? 'text' : 'password'}
+                        value={authPassword}
+                        onChange={(e) => setAuthPassword(e.target.value)}
+                        placeholder="パスワード"
+                        autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+                        className="w-full p-2 pr-10 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowAuthPassword((prev) => !prev)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                        aria-label={showAuthPassword ? 'パスワードを隠す' : 'パスワードを表示'}
+                      >
+                        {showAuthPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {authMessage && (
+                    <div
+                      className={`text-xs font-medium p-3 rounded-lg border ${
+                        authNoticeKind === 'warning'
+                          ? 'bg-amber-50 border-amber-200 text-amber-800'
+                          : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      }`}
+                    >
+                      <p>{authMessage}</p>
+                      {canResendSignupEmail && authMode === 'signup' && (
+                        <button
+                          type="button"
+                          onClick={handleResendSignupEmail}
+                          disabled={resendingSignupEmail}
+                          className="mt-2 text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer disabled:opacity-50"
+                        >
+                          {resendingSignupEmail ? '再送中...' : '認証メールを再送する'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={authSubmitting}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg text-xs transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    {authSubmitting
+                      ? '処理中...'
+                      : authMode === 'signup'
+                      ? 'メールアドレスで会員登録'
+                      : 'メールアドレスでログイン'}
+                  </button>
+                </form>
+            </div>
+            )}
+
+            {session?.user ? (
+              <>
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
               <div className="flex items-start gap-4 border-b border-slate-100 pb-4">
                 <div className="relative group">
@@ -1238,7 +2102,15 @@ export default function App() {
                 </div>
               )}
 
-              {/* プロフィール編集 */}
+              <button
+                type="button"
+                onClick={() => setShowProfileEdit((prev) => !prev)}
+                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-4 rounded-lg text-xs transition-colors cursor-pointer"
+              >
+                {showProfileEdit ? 'プロフィール編集を閉じる' : 'プロフィールを編集'}
+              </button>
+
+              {showProfileEdit && (
               <div className="space-y-3 pt-1">
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 mb-1">ニックネーム</label>
@@ -1312,9 +2184,18 @@ export default function App() {
                   {savingProfile ? '保存中...' : 'プロフィール情報を保存する'}
                 </button>
               </div>
+              )}
 
-              {/* 資格申請 */}
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 mt-4">
+              <button
+                type="button"
+                onClick={() => setShowQualApply((prev) => !prev)}
+                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-4 rounded-lg text-xs transition-colors cursor-pointer"
+              >
+                {showQualApply ? '資格申請を閉じる' : '資格を申請'}
+              </button>
+
+              {showQualApply && (
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
                 <h3 className="font-bold text-xs text-slate-700 flex items-center gap-1.5 uppercase tracking-wider">
                   <Award className="w-4 h-4 text-indigo-600" />
                   新しい資格を申請する
@@ -1362,6 +2243,7 @@ export default function App() {
                   {submittingCert ? '送信中...' : `「${selectedQualification}」の免状を添えて申請する`}
                 </button>
               </div>
+              )}
             </div>
 
             {/* マイページの自分の投稿一覧 */}
@@ -1405,6 +2287,82 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+              )}
+            </div>
+
+            <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between gap-2">
+              <p className="text-[11px] text-slate-600 truncate min-w-0">
+                <span className="font-bold text-slate-800">{session.user.email}</span>
+              </p>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="shrink-0 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-1.5 px-3 rounded-lg text-[11px] transition-colors flex items-center gap-1 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                ログアウト
+              </button>
+            </div>
+              </>
+            ) : (
+              <p className="text-xs text-slate-500 text-center px-2">
+                ログインすると、自分のプロフィール・投稿・いいねを管理できます。
+              </p>
+            )}
+
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+              <button
+                type="button"
+                onClick={() => setShowContactForm((prev) => !prev)}
+                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-4 rounded-lg text-xs transition-colors cursor-pointer"
+              >
+                {showContactForm ? 'お問い合わせを閉じる' : 'お問い合わせ'}
+              </button>
+              {showContactForm && (
+                <>
+              <p className="text-xs text-slate-500">
+                ログインしなくても送れます。送信するとメールアプリが開き、宛先は {CONTACT_EMAIL} です。
+              </p>
+              <form onSubmit={handleContactSubmit} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">お名前</label>
+                  <input
+                    type="text"
+                    value={contactName}
+                    onChange={(e) => setContactName(e.target.value)}
+                    placeholder="お名前"
+                    className="w-full p-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">返信先メールアドレス</label>
+                  <input
+                    type="email"
+                    value={contactEmail}
+                    onChange={(e) => setContactEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="w-full p-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">お問い合わせ内容</label>
+                  <textarea
+                    value={contactMessage}
+                    onChange={(e) => setContactMessage(e.target.value)}
+                    placeholder="ご質問・ご意見をご記入ください"
+                    rows={4}
+                    className="w-full p-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                {contactNotice && <p className="text-xs text-emerald-700 font-medium">{contactNotice}</p>}
+                <button
+                  type="submit"
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg text-xs transition-colors cursor-pointer"
+                >
+                  メールで送信する
+                </button>
+              </form>
+                </>
               )}
             </div>
           </div>
@@ -1705,6 +2663,17 @@ export default function App() {
               </div>
             )}
 
+            {viewUserProfile.nickname !== nickname && (
+              <button
+                type="button"
+                onClick={(e) => openChatWith(viewUserProfile.nickname, e)}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <MessageSquare className="w-4 h-4" />
+                メッセージ
+              </button>
+            )}
+
             <div className="text-left pt-2 border-t border-slate-100 space-y-2">
               <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                 {viewUserProfile.nickname} さんの投稿一覧
@@ -1734,7 +2703,7 @@ export default function App() {
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-40 max-w-lg mx-auto">
         <div className="flex justify-around py-2">
           <button
-            onClick={() => setActiveTab('home')}
+            onClick={goToHome}
             className={`flex flex-col items-center gap-1 text-xs cursor-pointer ${
               activeTab === 'home' ? 'text-indigo-600 font-bold' : 'text-slate-400'
             }`}
@@ -1743,13 +2712,22 @@ export default function App() {
             ホーム
           </button>
           <button
-            onClick={() => setActiveTab('search')}
+            onClick={goToSearch}
             className={`flex flex-col items-center gap-1 text-xs cursor-pointer ${
               activeTab === 'search' ? 'text-indigo-600 font-bold' : 'text-slate-400'
             }`}
           >
             <Search className="w-5 h-5" />
             検索
+          </button>
+          <button
+            onClick={goToMessages}
+            className={`flex flex-col items-center gap-1 text-[11px] cursor-pointer ${
+              activeTab === 'messages' ? 'text-indigo-600 font-bold' : 'text-slate-400'
+            }`}
+          >
+            <MessageSquare className="w-5 h-5" />
+            メッセージ
           </button>
           <button
             onClick={() => setActiveTab('favorites')}
