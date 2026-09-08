@@ -2700,11 +2700,11 @@ export default function App() {
       )}
 
       {/* ナビゲーション */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-40 max-w-lg mx-auto">
-        <div className="flex justify-around py-2">
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-40">
+        <div className="grid grid-cols-5 items-center py-2 w-full">
           <button
             onClick={goToHome}
-            className={`flex flex-col items-center gap-1 text-xs cursor-pointer ${
+            className={`flex flex-col items-center justify-center gap-1 text-xs cursor-pointer ${
               activeTab === 'home' ? 'text-indigo-600 font-bold' : 'text-slate-400'
             }`}
           >
@@ -2713,7 +2713,7 @@ export default function App() {
           </button>
           <button
             onClick={goToSearch}
-            className={`flex flex-col items-center gap-1 text-xs cursor-pointer ${
+            className={`flex flex-col items-center justify-center gap-1 text-xs cursor-pointer ${
               activeTab === 'search' ? 'text-indigo-600 font-bold' : 'text-slate-400'
             }`}
           >
@@ -2722,7 +2722,7 @@ export default function App() {
           </button>
           <button
             onClick={goToMessages}
-            className={`flex flex-col items-center gap-1 text-[11px] cursor-pointer ${
+            className={`flex flex-col items-center justify-center gap-1 text-xs cursor-pointer ${
               activeTab === 'messages' ? 'text-indigo-600 font-bold' : 'text-slate-400'
             }`}
           >
@@ -2731,7 +2731,7 @@ export default function App() {
           </button>
           <button
             onClick={() => setActiveTab('favorites')}
-            className={`flex flex-col items-center gap-1 text-xs cursor-pointer ${
+            className={`flex flex-col items-center justify-center gap-1 text-xs cursor-pointer ${
               activeTab === 'favorites' ? 'text-indigo-600 font-bold' : 'text-slate-400'
             }`}
           >
@@ -2740,7 +2740,7 @@ export default function App() {
           </button>
           <button
             onClick={() => setActiveTab('mypage')}
-            className={`flex flex-col items-center gap-1 text-xs cursor-pointer ${
+            className={`flex flex-col items-center justify-center gap-1 text-xs cursor-pointer ${
               activeTab === 'mypage' ? 'text-indigo-600 font-bold' : 'text-slate-400'
             }`}
           >
