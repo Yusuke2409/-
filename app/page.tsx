@@ -1633,7 +1633,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20 text-slate-800">
-      <header className="sticky top-0 z-10 bg-white border-b border-slate-200 px-4 py-3 shadow-sm flex justify-between items-center gap-2">
+      <header className="sticky top-0 z-10 bg-[#F3E8D8] border-b border-[#E4D5C1] px-4 py-3 shadow-sm flex justify-between items-center gap-2">
         <h1 className="text-sm sm:text-base font-bold text-slate-800 leading-tight">Madori Community：マドコミ</h1>
         {session?.user?.email ? (
           <span className="text-[11px] text-slate-500 truncate max-w-[45%] text-right">
