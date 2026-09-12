@@ -46,6 +46,7 @@ type Post = {
   doc_type: string
   layout?: string
   floors?: string
+  maker?: string
   comment: string
   nickname?: string
   avatar_url?: string
@@ -53,6 +54,8 @@ type Post = {
   bio?: string
   likes_count?: number
   user_id?: string
+  floor_area_min?: number | null
+  floor_area_max?: number | null
 }
 
 type Comment = {
@@ -99,6 +102,134 @@ const CHAT_IMAGE_MARKER = 'IMAGE:'
 
 const CONTACT_EMAIL = 'madocomi.official@gmail.com'
 
+const FLOOR_AREA_STEPS = [60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200]
+const FLOOR_AREA_BAND_TENS = [60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190]
+
+const FLOOR_AREA_BANDS: { value: string; label: string; min: number | null; max: number | null }[] = [
+  { value: 'under60', label: '60㎡以下', min: 0, max: 60 },
+  ...FLOOR_AREA_BAND_TENS.map((n) => ({
+    value: String(n),
+    label: `${n}㎡台`,
+    min: n,
+    max: n + 10,
+  })),
+  { value: '200plus', label: '200㎡以上', min: 200, max: null },
+]
+
+function formatFloorAreaBand(min?: number | string | null, max?: number | string | null) {
+  const minN = min == null || min === '' ? null : Number(min)
+  const maxN = max == null || max === '' ? null : Number(max)
+  const hasMin = minN != null && Number.isFinite(minN)
+  const hasMax = maxN != null && Number.isFinite(maxN)
+  if (!hasMin && !hasMax) return null
+  if ((minN == null || minN === 0) && maxN === 60) return '60㎡以下'
+  if (minN === 200 && (maxN == null || maxN === 0)) return '200㎡以上'
+  if (minN != null && maxN === minN + 10 && minN >= 60 && minN <= 190) return `${minN}㎡台`
+  if (!hasMin && !hasMax) return null
+  const left = hasMin && minN > 0 ? `${minN}㎡以上` : '下限なし'
+  const right = hasMax && maxN > 0 ? `${maxN}㎡未満` : '上限なし'
+  return `${left}〜${right}`
+}
+
+function PostMetaTags({ post, className = '' }: { post: Post; className?: string }) {
+  const areaLabel = formatFloorAreaBand(post.floor_area_min, post.floor_area_max)
+  return (
+    <div className={`flex gap-1.5 flex-wrap ${className}`}>
+      {post.doc_type && (
+        <span className="text-xs font-semibold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">
+          {post.doc_type}
+        </span>
+      )}
+      {post.layout && (
+        <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
+          {post.layout}
+        </span>
+      )}
+      {post.floors && (
+        <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
+          {post.floors}
+        </span>
+      )}
+      {areaLabel && (
+        <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{areaLabel}</span>
+      )}
+      {post.maker && (
+        <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{post.maker}</span>
+      )}
+    </div>
+  )
+}
+
+function FloorAreaRangeSelects({
+  minValue,
+  maxValue,
+  onMinChange,
+  onMaxChange,
+}: {
+  minValue: string
+  maxValue: string
+  onMinChange: (value: string) => void
+  onMaxChange: (value: string) => void
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <select
+        value={minValue}
+        onChange={(e) => onMinChange(e.target.value)}
+        className="flex-1 min-w-0 p-2 text-xs border border-slate-200 rounded-lg bg-white"
+      >
+        <option value="">下限なし</option>
+        {FLOOR_AREA_STEPS.map((n) => (
+          <option key={`min-${n}`} value={String(n)}>
+            {n}㎡以上
+          </option>
+        ))}
+      </select>
+      <span className="text-slate-400 text-xs shrink-0">〜</span>
+      <select
+        value={maxValue}
+        onChange={(e) => onMaxChange(e.target.value)}
+        className="flex-1 min-w-0 p-2 text-xs border border-slate-200 rounded-lg bg-white"
+      >
+        {FLOOR_AREA_STEPS.map((n) => (
+          <option key={`max-${n}`} value={String(n)}>
+            {n}㎡未満
+          </option>
+        ))}
+        <option value="">上限なし</option>
+      </select>
+    </div>
+  )
+}
+
+const MAKER_OPTIONS = [
+  'ダイワハウス',
+  '積水ハウス',
+  '住友林業',
+  '一条工務店',
+  'アイ工務店',
+  '三井ホーム',
+  'ヤマト住建',
+  'ヘーベルハウス',
+  'ミサワホーム',
+  'スウェーデンハウス',
+  'セキスイハイム',
+  'トヨタホーム',
+  'パナソニック ホームズ',
+  '桧家住宅',
+  'クレバリーホーム',
+  'ヤマダホームズ',
+  'タマホーム',
+  'アイフルホーム',
+  'アキュラホーム',
+  'ウィザースホーム',
+  '日本ハウスホールディングス',
+  '住友不動産',
+  'セルコホーム',
+  'アエラホーム',
+  'その他',
+]
+
 const QUALIFICATION_OPTIONS = [
   '一級建築士',
   '二級建築士',
@@ -111,6 +242,70 @@ const QUALIFICATION_OPTIONS = [
   'インテリアプランナー',
   '福祉住環境コーディネーター',
 ]
+
+function missingColumnFromError(message: string) {
+  const match =
+    message.match(/Could not find the '([^']+)' column/i) ||
+    message.match(/column "([^"]+)" of relation/i)
+  return match?.[1] ?? null
+}
+
+type PostAreaMeta = { maker?: string; min?: number | null; max?: number | null }
+
+function stripPostMetaComment(comment: string) {
+  return (comment || '').replace(/\n?\[\[mc:[\s\S]*\]\]\s*$/, '').trim()
+}
+
+function encodePostMetaComment(comment: string, meta: PostAreaMeta) {
+  return `${stripPostMetaComment(comment)}\n[[mc:${JSON.stringify(meta)}]]`
+}
+
+function parsePostMetaComment(comment: string): PostAreaMeta {
+  const match = (comment || '').match(/\[\[mc:([\s\S]*)\]\]\s*$/)
+  if (!match) return {}
+  try {
+    const data = JSON.parse(match[1])
+    return {
+      maker: typeof data.maker === 'string' ? data.maker : undefined,
+      min: data.min ?? null,
+      max: data.max ?? null,
+    }
+  } catch {
+    return {}
+  }
+}
+
+function withPostMeta(post: {
+  comment?: string
+  maker?: string | null
+  floor_area_min?: number | string | null
+  floor_area_max?: number | string | null
+}) {
+  const meta = parsePostMetaComment(post.comment || '')
+  const minFromCol = post.floor_area_min != null && post.floor_area_min !== '' ? Number(post.floor_area_min) : null
+  const maxFromCol = post.floor_area_max != null && post.floor_area_max !== '' ? Number(post.floor_area_max) : null
+  return {
+    comment: stripPostMetaComment(post.comment || ''),
+    maker: post.maker || meta.maker || '',
+    floor_area_min: minFromCol != null && Number.isFinite(minFromCol) ? minFromCol : meta.min ?? null,
+    floor_area_max: maxFromCol != null && Number.isFinite(maxFromCol) ? maxFromCol : meta.max ?? null,
+  }
+}
+
+async function insertPostRow(payload: Record<string, unknown>) {
+  const current: Record<string, unknown> = { ...payload }
+  for (let i = 0; i < 12; i++) {
+    const { error } = await supabase.from('posts').insert([current])
+    if (!error) return
+    const column = missingColumnFromError(error.message)
+    if (column && column in current) {
+      delete current[column]
+      continue
+    }
+    throw error
+  }
+  throw new Error('投稿に失敗しました')
+}
 
 function ImageCarousel({ images }: { images: string[] }) {
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -263,9 +458,11 @@ export default function App() {
   // 新規投稿
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [previewUrls, setPreviewUrls] = useState<string[]>([])
-  const [docType, setDocType] = useState('平面図')
-  const [layout, setLayout] = useState('1LDK')
-  const [floors, setFloors] = useState('平屋')
+  const [docType, setDocType] = useState('')
+  const [layout, setLayout] = useState('')
+  const [floors, setFloors] = useState('')
+  const [floorAreaBand, setFloorAreaBand] = useState('')
+  const [maker, setMaker] = useState('')
   const [comment, setComment] = useState('')
   const [showPrivacyConfirm, setShowPrivacyConfirm] = useState(false) // 個人情報確認ダイアログ制御
 
@@ -273,6 +470,11 @@ export default function App() {
   const [searchDocType, setSearchDocType] = useState('すべて')
   const [searchLayout, setSearchLayout] = useState('すべて')
   const [searchFloors, setSearchFloors] = useState('すべて')
+  const [searchFloorAreaMin, setSearchFloorAreaMin] = useState('')
+  const [searchFloorAreaMax, setSearchFloorAreaMax] = useState('')
+  const [searchMakers, setSearchMakers] = useState<string[]>([])
+  const [draftSearchMakers, setDraftSearchMakers] = useState<string[]>([])
+  const [showSearchMakers, setShowSearchMakers] = useState(false)
 
   useEffect(() => {
     fetchPosts(null)
@@ -310,7 +512,7 @@ export default function App() {
 
   useEffect(() => {
     applyFilter()
-  }, [posts, searchDocType, searchLayout, searchFloors])
+  }, [posts, searchDocType, searchLayout, searchFloors, searchFloorAreaMin, searchFloorAreaMax, searchMakers])
 
   useEffect(() => {
     if (session?.user?.email && !contactEmail) {
@@ -685,8 +887,10 @@ export default function App() {
 
     const formattedPosts = (postsData || []).map((post) => {
       const u = usersMap[post.nickname]
+      const metaFields = withPostMeta(post)
       return {
         ...post,
+        ...metaFields,
         avatar_url: u?.avatar_url || post.avatar_url,
         bio: u?.bio || post.bio,
         user_urls: u?.user_urls || (u?.user_url ? [u.user_url] : post.user_urls || []),
@@ -900,6 +1104,19 @@ export default function App() {
     if (searchFloors !== 'すべて') {
       result = result.filter((p) => p.floors === searchFloors)
     }
+    if (searchMakers.length > 0) {
+      result = result.filter((p) => p.maker && searchMakers.includes(p.maker))
+    }
+    if (searchFloorAreaMin || searchFloorAreaMax) {
+      const sMin = searchFloorAreaMin ? Number(searchFloorAreaMin) : 0
+      const sMax = searchFloorAreaMax ? Number(searchFloorAreaMax) : Number.POSITIVE_INFINITY
+      result = result.filter((p) => {
+        if (p.floor_area_min == null && p.floor_area_max == null) return false
+        const pMin = p.floor_area_min ?? 0
+        const pMax = p.floor_area_max ?? Number.POSITIVE_INFINITY
+        return pMin < sMax && pMax > sMin
+      })
+    }
 
     setFilteredPosts(result)
   }
@@ -1026,6 +1243,12 @@ export default function App() {
       return alert('投稿するには、マイページでニックネームを設定してください')
     }
     if (selectedFiles.length === 0) return alert('画像を少なくとも1枚選択してください')
+    if (!docType) return alert('図面種類を選択してください')
+    if (!layout) return alert('間取りを選択してください')
+    if (!floors) return alert('階数を選択してください')
+    if (!floorAreaBand) return alert('延べ面積を選択してください')
+    if (!maker) return alert('メーカーを選択してください')
+    if (!comment.trim()) return alert('説明・コメントを入力してください')
     setShowPrivacyConfirm(true)
   }
 
@@ -1059,6 +1282,7 @@ export default function App() {
       }
 
       const filteredUrls = userUrls.map((u) => u.trim()).filter(Boolean).slice(0, 3)
+      const areaBand = FLOOR_AREA_BANDS.find((b) => b.value === floorAreaBand)
 
       const postPayload = {
         image_urls: uploadedUrls,
@@ -1066,7 +1290,14 @@ export default function App() {
         doc_type: docType,
         layout: layout,
         floors: floors,
-        comment: comment,
+        maker: maker,
+        floor_area_min: areaBand ? areaBand.min : null,
+        floor_area_max: areaBand ? areaBand.max : null,
+        comment: encodePostMetaComment(comment.trim(), {
+          maker,
+          min: areaBand ? areaBand.min : null,
+          max: areaBand ? areaBand.max : null,
+        }),
         nickname: nickname,
         avatar_url: avatarUrl,
         bio: bio,
@@ -1075,16 +1306,15 @@ export default function App() {
         user_email: session.user.email,
       }
 
-      const { error: insertError } = await supabase.from('posts').insert([postPayload])
-
-      if (insertError) {
-        const { user_id: _uid, user_email: _email, ...withoutAuthCols } = postPayload
-        const { error: fallbackError } = await supabase.from('posts').insert([withoutAuthCols])
-        if (fallbackError) throw fallbackError
-      }
+      await insertPostRow(postPayload)
 
       setSelectedFiles([])
       setPreviewUrls([])
+      setDocType('')
+      setLayout('')
+      setFloors('')
+      setFloorAreaBand('')
+      setMaker('')
       setComment('')
       alert('投稿が完了しました！')
       fetchPosts(session.user, nickname)
@@ -1159,24 +1389,24 @@ export default function App() {
   }
 
   const handleAddModalComment = async (postId: number) => {
-    if (!session?.user) {
-      requireLogin()
-      return
-    }
-    if (!nickname.trim()) {
+    if (!modalCommentInput || !modalCommentInput.trim()) return
+
+    const displayName = session?.user ? nickname.trim() : 'ゲスト'
+    if (session?.user && !displayName) {
       setActiveTab('mypage')
       return alert('コメントするには、マイページでニックネームを設定してください')
     }
-    if (!modalCommentInput || !modalCommentInput.trim()) return
 
     try {
-      const filteredUrls = userUrls.map((u) => u.trim()).filter(Boolean).slice(0, 3)
+      const filteredUrls = session?.user
+        ? userUrls.map((u) => u.trim()).filter(Boolean).slice(0, 3)
+        : []
 
       const insertData: any = {
         post_id: postId,
-        nickname: nickname,
-        avatar_url: avatarUrl,
-        bio: bio,
+        nickname: displayName,
+        avatar_url: session?.user ? avatarUrl : '',
+        bio: session?.user ? bio : '',
         user_urls: filteredUrls,
         content: modalCommentInput.trim(),
       }
@@ -1262,6 +1492,7 @@ export default function App() {
 
   const openUserProfile = async (user: UserProfileView, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
+    if (!user.nickname || user.nickname === 'ゲスト') return
 
     const { data } = await supabase
       .from('users')
@@ -1269,15 +1500,25 @@ export default function App() {
       .eq('nickname', user.nickname)
       .single()
 
+    const toUrlList = (urls: unknown, fallback?: string) => {
+      if (Array.isArray(urls)) return urls.filter(Boolean)
+      if (typeof urls === 'string' && urls) return [urls]
+      if (fallback) return [fallback]
+      return []
+    }
+
     if (data) {
       setViewUserProfile({
         nickname: data.nickname,
         avatar_url: data.avatar_url || user.avatar_url,
         bio: data.bio || user.bio,
-        user_urls: data.user_urls || (data.user_url ? [data.user_url] : user.user_urls || []),
+        user_urls: toUrlList(data.user_urls, data.user_url) || toUrlList(user.user_urls),
       })
     } else {
-      setViewUserProfile(user)
+      setViewUserProfile({
+        ...user,
+        user_urls: toUrlList(user.user_urls),
+      })
     }
   }
 
@@ -1315,19 +1556,32 @@ export default function App() {
               url={c.avatar_url}
               nickname={c.nickname}
               size="sm"
-              onClick={(e) =>
-                openUserProfile({ nickname: c.nickname, avatar_url: c.avatar_url, user_urls: c.user_urls, bio: c.bio }, e)
+              onClick={
+                c.nickname === 'ゲスト'
+                  ? undefined
+                  : (e) =>
+                      openUserProfile(
+                        { nickname: c.nickname, avatar_url: c.avatar_url, user_urls: c.user_urls, bio: c.bio },
+                        e
+                      )
               }
             />
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                openUserProfile({ nickname: c.nickname, avatar_url: c.avatar_url, user_urls: c.user_urls, bio: c.bio }, e)
-              }}
-              className="font-bold text-xs text-slate-800 hover:underline cursor-pointer"
-            >
-              {c.nickname}
-            </button>
+            {c.nickname === 'ゲスト' ? (
+              <span className="font-bold text-xs text-slate-800">ゲスト</span>
+            ) : (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  openUserProfile(
+                    { nickname: c.nickname, avatar_url: c.avatar_url, user_urls: c.user_urls, bio: c.bio },
+                    e
+                  )
+                }}
+                className="font-bold text-xs text-slate-800 hover:underline cursor-pointer"
+              >
+                {c.nickname}
+              </button>
+            )}
             {quals.map((q, idx) => (
               <span
                 key={idx}
@@ -1443,6 +1697,7 @@ export default function App() {
                     onChange={(e) => setDocType(e.target.value)}
                     className="w-full p-2 text-xs border border-slate-200 rounded-lg bg-white"
                   >
+                    <option value="">未選択</option>
                     <option value="平面図">平面図</option>
                     <option value="電気図面">電気図面</option>
                   </select>
@@ -1455,6 +1710,7 @@ export default function App() {
                     onChange={(e) => setLayout(e.target.value)}
                     className="w-full p-2 text-xs border border-slate-200 rounded-lg bg-white"
                   >
+                    <option value="">未選択</option>
                     <option value="1LDK">1LDK</option>
                     <option value="2LDK">2LDK</option>
                     <option value="3LDK">3LDK</option>
@@ -1470,12 +1726,45 @@ export default function App() {
                     onChange={(e) => setFloors(e.target.value)}
                     className="w-full p-2 text-xs border border-slate-200 rounded-lg bg-white"
                   >
+                    <option value="">未選択</option>
                     <option value="平屋">平屋</option>
                     <option value="2階建">2階建</option>
                     <option value="3階建">3階建</option>
                     <option value="それ以上">それ以上</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">延べ面積</label>
+                <select
+                  value={floorAreaBand}
+                  onChange={(e) => setFloorAreaBand(e.target.value)}
+                  className="w-full p-2 text-xs border border-slate-200 rounded-lg bg-white"
+                >
+                  <option value="">未選択</option>
+                  {FLOOR_AREA_BANDS.map((band) => (
+                    <option key={band.value} value={band.value}>
+                      {band.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">メーカー</label>
+                <select
+                  value={maker}
+                  onChange={(e) => setMaker(e.target.value)}
+                  className="w-full p-2 text-xs border border-slate-200 rounded-lg bg-white"
+                >
+                  <option value="">未選択</option>
+                  {MAKER_OPTIONS.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -1574,21 +1863,7 @@ export default function App() {
                       )}
                     </div>
 
-                    <div className="px-3 flex gap-1.5 flex-wrap">
-                      <span className="text-xs font-semibold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">
-                        {post.doc_type}
-                      </span>
-                      {post.layout && (
-                        <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                          {post.layout}
-                        </span>
-                      )}
-                      {post.floors && (
-                        <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                          {post.floors}
-                        </span>
-                      )}
-                    </div>
+                    <PostMetaTags post={post} className="px-3" />
 
                     <ImageCarousel images={post.image_urls} />
 
@@ -1632,13 +1907,13 @@ export default function App() {
                 絞り込み検索
               </h2>
 
-              <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 mb-1">図面種類</label>
                   <select
                     value={searchDocType}
                     onChange={(e) => setSearchDocType(e.target.value)}
-                    className="w-full p-2 text-sm border border-slate-200 rounded-lg bg-white"
+                    className="w-full p-2 text-xs border border-slate-200 rounded-lg bg-white"
                   >
                     <option value="すべて">すべて</option>
                     <option value="平面図">平面図</option>
@@ -1651,7 +1926,7 @@ export default function App() {
                   <select
                     value={searchLayout}
                     onChange={(e) => setSearchLayout(e.target.value)}
-                    className="w-full p-2 text-sm border border-slate-200 rounded-lg bg-white"
+                    className="w-full p-2 text-xs border border-slate-200 rounded-lg bg-white"
                   >
                     <option value="すべて">すべて</option>
                     <option value="1LDK">1LDK</option>
@@ -1667,7 +1942,7 @@ export default function App() {
                   <select
                     value={searchFloors}
                     onChange={(e) => setSearchFloors(e.target.value)}
-                    className="w-full p-2 text-sm border border-slate-200 rounded-lg bg-white"
+                    className="w-full p-2 text-xs border border-slate-200 rounded-lg bg-white"
                   >
                     <option value="すべて">すべて</option>
                     <option value="平屋">平屋</option>
@@ -1676,6 +1951,82 @@ export default function App() {
                     <option value="それ以上">それ以上</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">延べ面積</label>
+                <FloorAreaRangeSelects
+                  minValue={searchFloorAreaMin}
+                  maxValue={searchFloorAreaMax}
+                  onMinChange={setSearchFloorAreaMin}
+                  onMaxChange={setSearchFloorAreaMax}
+                />
+              </div>
+
+              <div className="relative">
+                <label className="block text-xs font-semibold text-slate-500 mb-1">メーカー</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!showSearchMakers) setDraftSearchMakers(searchMakers)
+                    setShowSearchMakers(!showSearchMakers)
+                  }}
+                  className="w-full p-2 text-xs border border-slate-200 rounded-lg bg-white flex items-center justify-between gap-2 text-left"
+                >
+                  <span className="truncate text-slate-700">
+                    {searchMakers.length === 0 ? 'すべて' : searchMakers.join('、')}
+                  </span>
+                  {showSearchMakers ? (
+                    <ChevronUp className="w-4 h-4 text-slate-400 shrink-0" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                  )}
+                </button>
+                {showSearchMakers && (
+                  <div className="absolute z-20 mt-1 w-full border border-slate-200 rounded-lg bg-white shadow-md overflow-hidden">
+                    <div className="p-2 border-b border-slate-100 bg-white">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSearchMakers(draftSearchMakers)
+                          setShowSearchMakers(false)
+                        }}
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-3 rounded-lg text-xs cursor-pointer"
+                      >
+                        完了
+                      </button>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto">
+                      <label className="flex items-center gap-2 px-3 py-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 border-b border-slate-100">
+                        <input
+                          type="checkbox"
+                          checked={draftSearchMakers.length === 0}
+                          onChange={() => setDraftSearchMakers([])}
+                          className="rounded border-slate-300"
+                        />
+                        すべて
+                      </label>
+                      {MAKER_OPTIONS.map((name) => (
+                        <label
+                          key={name}
+                          className="flex items-center gap-2 px-3 py-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={draftSearchMakers.includes(name)}
+                            onChange={() => {
+                              setDraftSearchMakers((prev) =>
+                                prev.includes(name) ? prev.filter((m) => m !== name) : [...prev, name]
+                              )
+                            }}
+                            className="rounded border-slate-300"
+                          />
+                          {name}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2387,9 +2738,6 @@ export default function App() {
                   <strong className="text-slate-800">お名前・ご住所・電話番号</strong>（建築主欄、名刺など）
                 </li>
                 <li>
-                  <strong className="text-slate-800">会社名・担当者名</strong>（ハウスメーカー・工務店）
-                </li>
-                <li>
                   <strong className="text-slate-800">敷地住所・周辺地図・地番</strong>
                 </li>
               </ul>
@@ -2499,21 +2847,7 @@ export default function App() {
             <div className="overflow-y-auto flex-1 p-4 space-y-4">
               <ImageCarousel images={selectedPost.image_urls} />
 
-              <div className="flex gap-1.5 flex-wrap">
-                <span className="text-xs font-semibold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">
-                  {selectedPost.doc_type}
-                </span>
-                {selectedPost.layout && (
-                  <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                    {selectedPost.layout}
-                  </span>
-                )}
-                {selectedPost.floors && (
-                  <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                    {selectedPost.floors}
-                  </span>
-                )}
-              </div>
+              <PostMetaTags post={selectedPost} />
 
               {selectedPost.comment && (
                 <p className="text-sm text-slate-800 whitespace-pre-wrap bg-slate-50 p-3 rounded-lg border border-slate-100">
@@ -2646,7 +2980,7 @@ export default function App() {
             </div>
 
             {/* URL表示 (最大3件) */}
-            {viewUserProfile.user_urls && viewUserProfile.user_urls.length > 0 && (
+            {Array.isArray(viewUserProfile.user_urls) && viewUserProfile.user_urls.length > 0 && (
               <div className="space-y-1.5 pt-1">
                 {viewUserProfile.user_urls.map((url, idx) => (
                   <a
