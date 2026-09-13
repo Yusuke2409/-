@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Session } from '@supabase/supabase-js'
 import {
@@ -388,6 +388,15 @@ function ImageCarousel({ images }: { images: string[] }) {
   )
 }
 
+function NavBadge({ count }: { count: number }) {
+  if (count <= 0) return null
+  return (
+    <span className="absolute -top-1.5 -right-3 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-bold leading-none flex items-center justify-center">
+      {count > 9 ? '9+' : count}
+    </span>
+  )
+}
+
 function AvatarIcon({
   url,
   nickname,
@@ -507,6 +516,15 @@ export default function App() {
   const [searchMakers, setSearchMakers] = useState<string[]>([])
   const [draftSearchMakers, setDraftSearchMakers] = useState<string[]>([])
   const [showSearchMakers, setShowSearchMakers] = useState(false)
+  const [commentSeen, setCommentSeen] = useState<Record<string, number>>({})
+  const [messageSeen, setMessageSeen] = useState<Record<string, number>>({})
+  const [unreadCommentCount, setUnreadCommentCount] = useState(0)
+  const [unreadChatCount, setUnreadChatCount] = useState(0)
+  const [inAppNotice, setInAppNotice] = useState<{ text: string; postId?: number; nick?: string } | null>(null)
+  const commentHydrated = useRef(false)
+  const messageHydrated = useRef(false)
+  const prevUnreadComment = useRef(0)
+  const prevUnreadChat = useRef(0)
 
   useEffect(() => {
     fetchPosts(null)
@@ -572,6 +590,27 @@ export default function App() {
       setShowContactForm(false)
     }
   }, [activeTab])
+
+  useEffect(() => {
+    if (!session?.user) {
+      setCommentSeen({})
+      setMessageSeen({})
+      commentHydrated.current = false
+      messageHydrated.current = false
+      return
+    }
+    try {
+      const c = localStorage.getItem(`madocomi_comment_seen_${session.user.id}`)
+      const m = localStorage.getItem(`madocomi_message_seen_${session.user.id}`)
+      setCommentSeen(c ? JSON.parse(c) : {})
+      setMessageSeen(m ? JSON.parse(m) : {})
+    } catch {
+      setCommentSeen({})
+      setMessageSeen({})
+    }
+    commentHydrated.current = false
+    messageHydrated.current = false
+  }, [session?.user?.id])
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -814,6 +853,13 @@ export default function App() {
     setSelectedChatNick(null)
     setChatImageFile(null)
     setChatImagePreview(null)
+    commentHydrated.current = false
+    messageHydrated.current = false
+    prevUnreadComment.current = 0
+    prevUnreadChat.current = 0
+    setUnreadCommentCount(0)
+    setUnreadChatCount(0)
+    setInAppNotice(null)
   }
 
   const applyUserRow = (data: any) => {
@@ -1091,6 +1137,82 @@ export default function App() {
       })
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
     setChatMessages(list)
+  }
+
+  useEffect(() => {
+    if (!session?.user) return
+    const timer = window.setInterval(() => {
+      fetchComments()
+      if (nickname.trim()) fetchMessages(nickname)
+    }, 20000)
+    return () => window.clearInterval(timer)
+  }, [session?.user?.id, nickname])
+
+  const notifyArrival = (text: string, extra?: { postId?: number; nick?: string }) => {
+    setInAppNotice({ text, ...extra })
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification('マドコミ', { body: text })
+      } catch {
+        /* ignore */
+      }
+    }
+    window.setTimeout(() => {
+      setInAppNotice((prev) => (prev?.text === text ? null : prev))
+    }, 8000)
+  }
+
+  const enableBrowserNotify = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator)) {
+      return alert('このブラウザはプッシュ通知に対応していません。')
+    }
+    if (!session?.user) {
+      requireLogin()
+      return
+    }
+    const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+    if (!vapidKey) {
+      return alert('プッシュ通知の設定キーがまだありません。管理者に NEXT_PUBLIC_VAPID_PUBLIC_KEY の設定を依頼してください。')
+    }
+
+    const permission = await Notification.requestPermission()
+    if (permission !== 'granted') {
+      return alert('通知は許可されませんでした。ブラウザの設定から変更できます。')
+    }
+
+    try {
+      const registration = await navigator.serviceWorker.register('/sw.js')
+      await navigator.serviceWorker.ready
+
+      const toUint8 = (base64: string) => {
+        const padding = '='.repeat((4 - (base64.length % 4)) % 4)
+        const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/')
+        const raw = atob(b64)
+        const output = new Uint8Array(raw.length)
+        for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i)
+        return output
+      }
+
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: toUint8(vapidKey),
+      })
+      const json = subscription.toJSON()
+      const { error } = await supabase.from('push_subscriptions').upsert(
+        {
+          user_id: session.user.id,
+          nickname: nickname.trim() || null,
+          endpoint: subscription.endpoint,
+          p256dh: json.keys?.p256dh,
+          auth: json.keys?.auth,
+        },
+        { onConflict: 'endpoint' }
+      )
+      if (error) throw error
+      alert('サイトを閉じている間も、コメントやメッセージを通知できるようにしました。')
+    } catch (error: any) {
+      alert('通知の登録に失敗しました。' + (error?.message ? authErrorJa(error.message) : ''))
+    }
   }
 
   const openChatWith = (targetNick: string, e?: React.MouseEvent) => {
@@ -1639,6 +1761,140 @@ export default function App() {
     return !!nickname && post.nickname === nickname
   })
 
+  useEffect(() => {
+    if (!session?.user || !nickname.trim()) {
+      setUnreadCommentCount(0)
+      return
+    }
+    const ownPosts = posts.filter((post) => {
+      if (session.user && post.user_id && post.user_id === session.user.id) return true
+      return post.nickname === nickname
+    })
+    if (!commentHydrated.current) {
+      if (Object.keys(commentSeen).length === 0) {
+        const next: Record<string, number> = {}
+        ownPosts.forEach((p) => {
+          const list = comments[p.id] || []
+          next[String(p.id)] = list.reduce((max, c) => Math.max(max, c.id), 0)
+        })
+        commentHydrated.current = true
+        setCommentSeen(next)
+        prevUnreadComment.current = 0
+        setUnreadCommentCount(0)
+        return
+      }
+      commentHydrated.current = true
+      let initialUnread = 0
+      ownPosts.forEach((p) => {
+        const seen = commentSeen[String(p.id)] ?? 0
+        initialUnread += (comments[p.id] || []).filter((c) => c.id > seen && c.nickname !== nickname).length
+      })
+      setUnreadCommentCount(initialUnread)
+      prevUnreadComment.current = initialUnread
+      return
+    }
+    let unread = 0
+    let firstPostId: number | undefined
+    ownPosts.forEach((p) => {
+      const seen = commentSeen[String(p.id)] ?? 0
+      ;(comments[p.id] || []).forEach((c) => {
+        if (c.id > seen && c.nickname !== nickname) {
+          unread += 1
+          if (firstPostId == null) firstPostId = p.id
+        }
+      })
+    })
+    setUnreadCommentCount(unread)
+    if (unread > prevUnreadComment.current) {
+      notifyArrival('投稿に新しいコメントが届きました', { postId: firstPostId })
+    }
+    prevUnreadComment.current = unread
+  }, [comments, posts, nickname, session, commentSeen])
+
+  useEffect(() => {
+    if (!session?.user || !nickname.trim()) {
+      setUnreadChatCount(0)
+      return
+    }
+    const incoming = chatMessages.filter(
+      (m) => m.recipient_nickname === nickname && m.sender_nickname !== nickname
+    )
+    if (!messageHydrated.current) {
+      if (Object.keys(messageSeen).length === 0) {
+        const next: Record<string, number> = {}
+        incoming.forEach((m) => {
+          next[m.sender_nickname] = Math.max(next[m.sender_nickname] || 0, m.id)
+        })
+        messageHydrated.current = true
+        setMessageSeen(next)
+        prevUnreadChat.current = 0
+        setUnreadChatCount(0)
+        return
+      }
+      messageHydrated.current = true
+      let initialUnread = 0
+      incoming.forEach((m) => {
+        const seen = messageSeen[m.sender_nickname] ?? 0
+        if (m.id > seen) initialUnread += 1
+      })
+      setUnreadChatCount(initialUnread)
+      prevUnreadChat.current = initialUnread
+      return
+    }
+    let unread = 0
+    let firstNick: string | undefined
+    incoming.forEach((m) => {
+      const seen = messageSeen[m.sender_nickname] ?? 0
+      if (m.id > seen) {
+        unread += 1
+        if (!firstNick) firstNick = m.sender_nickname
+      }
+    })
+    setUnreadChatCount(unread)
+    if (unread > prevUnreadChat.current) {
+      notifyArrival('新しいメッセージが届きました', { nick: firstNick })
+    }
+    prevUnreadChat.current = unread
+  }, [chatMessages, nickname, session, messageSeen])
+
+  useEffect(() => {
+    if (!session?.user || !commentHydrated.current) return
+    localStorage.setItem(`madocomi_comment_seen_${session.user.id}`, JSON.stringify(commentSeen))
+  }, [commentSeen, session?.user?.id])
+
+  useEffect(() => {
+    if (!session?.user || !messageHydrated.current) return
+    localStorage.setItem(`madocomi_message_seen_${session.user.id}`, JSON.stringify(messageSeen))
+  }, [messageSeen, session?.user?.id])
+
+  useEffect(() => {
+    if (!selectedPost || !session?.user) return
+    const isMine =
+      (selectedPost.user_id && selectedPost.user_id === session.user.id) ||
+      (!!nickname && selectedPost.nickname === nickname)
+    if (!isMine) return
+    const maxId = (comments[selectedPost.id] || []).reduce((max, c) => Math.max(max, c.id), 0)
+    setCommentSeen((prev) => {
+      if ((prev[String(selectedPost.id)] ?? 0) >= maxId) return prev
+      return { ...prev, [String(selectedPost.id)]: maxId }
+    })
+  }, [selectedPost, comments, session, nickname])
+
+  useEffect(() => {
+    if (activeTab !== 'messages' || !selectedChatNick || !nickname.trim()) return
+    const maxId = chatMessages
+      .filter(
+        (m) =>
+          (m.sender_nickname === nickname && m.recipient_nickname === selectedChatNick) ||
+          (m.sender_nickname === selectedChatNick && m.recipient_nickname === nickname)
+      )
+      .reduce((max, m) => Math.max(max, m.id), 0)
+    setMessageSeen((prev) => {
+      if ((prev[selectedChatNick] ?? 0) >= maxId) return prev
+      return { ...prev, [selectedChatNick]: maxId }
+    })
+  }, [activeTab, selectedChatNick, chatMessages, nickname])
+
   const renderCommentBox = (c: Comment, isChild = false) => {
     const quals = getApprovedQualsForUser(c.nickname)
     const isLiked = likedCommentIds.includes(c.id)
@@ -1757,6 +2013,33 @@ export default function App() {
           </button>
         )}
       </header>
+
+      {inAppNotice && (
+        <button
+          type="button"
+          onClick={() => {
+            if (inAppNotice.postId) {
+              const post = posts.find((p) => p.id === inAppNotice.postId)
+              if (post) {
+                setSelectedPost(post)
+                setReplyTarget(null)
+              }
+            } else if (inAppNotice.nick) {
+              if (!session?.user) {
+                requireLogin()
+              } else {
+                setSelectedChatNick(inAppNotice.nick)
+                setActiveTab('messages')
+                fetchMessages(nickname)
+              }
+            }
+            setInAppNotice(null)
+          }}
+          className="fixed top-14 left-1/2 -translate-x-1/2 z-50 max-w-sm w-[calc(100%-2rem)] bg-slate-800 text-white text-xs font-bold py-2.5 px-3 rounded-lg shadow-lg cursor-pointer"
+        >
+          {inAppNotice.text}
+        </button>
+      )}
 
       <main className="max-w-lg mx-auto p-4">
         {/* ホームタブ */}
@@ -2845,7 +3128,8 @@ export default function App() {
               )}
             </div>
 
-            <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between gap-2">
+            <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm space-y-2">
+              <div className="flex items-center justify-between gap-2">
               <p className="text-[11px] text-slate-600 truncate min-w-0">
                 <span className="font-bold text-slate-800">{session.user.email}</span>
               </p>
@@ -2856,6 +3140,14 @@ export default function App() {
               >
                 <LogOut className="w-3.5 h-3.5" />
                 ログアウト
+              </button>
+              </div>
+              <button
+                type="button"
+                onClick={enableBrowserNotify}
+                className="w-full text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer text-left"
+              >
+                サイトを閉じているときの通知をオンにする
               </button>
             </div>
               </>
@@ -3242,11 +3534,14 @@ export default function App() {
         <div className="grid grid-cols-5 items-center py-2 w-full">
           <button
             onClick={goToHome}
-            className={`flex flex-col items-center justify-center gap-1 text-xs cursor-pointer ${
+            className={`relative flex flex-col items-center justify-center gap-1 text-xs cursor-pointer ${
               activeTab === 'home' ? 'text-indigo-600 font-bold' : 'text-slate-400'
             }`}
           >
-            <Home className="w-5 h-5" />
+            <span className="relative">
+              <Home className="w-5 h-5" />
+              <NavBadge count={unreadCommentCount} />
+            </span>
             ホーム
           </button>
           <button
@@ -3260,11 +3555,14 @@ export default function App() {
           </button>
           <button
             onClick={goToMessages}
-            className={`flex flex-col items-center justify-center gap-1 text-xs cursor-pointer ${
+            className={`relative flex flex-col items-center justify-center gap-1 text-xs cursor-pointer ${
               activeTab === 'messages' ? 'text-indigo-600 font-bold' : 'text-slate-400'
             }`}
           >
-            <MessageSquare className="w-5 h-5" />
+            <span className="relative">
+              <MessageSquare className="w-5 h-5" />
+              <NavBadge count={unreadChatCount} />
+            </span>
             メッセージ
           </button>
           <button

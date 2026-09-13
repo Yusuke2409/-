@@ -1,0 +1,9 @@
+{
+  "name": "Madori Community：マドコミ",
+  "short_name": "マドコミ",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F3E8D8",
+  "theme_color": "#F3E8D8",
+  "lang": "ja"
+}
