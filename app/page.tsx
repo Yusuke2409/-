@@ -1162,59 +1162,6 @@ export default function App() {
     }, 8000)
   }
 
-  const enableBrowserNotify = async () => {
-    if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator)) {
-      return alert('このブラウザはプッシュ通知に対応していません。')
-    }
-    if (!session?.user) {
-      requireLogin()
-      return
-    }
-    const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
-    if (!vapidKey) {
-      return alert('プッシュ通知の設定キーがまだありません。管理者に NEXT_PUBLIC_VAPID_PUBLIC_KEY の設定を依頼してください。')
-    }
-
-    const permission = await Notification.requestPermission()
-    if (permission !== 'granted') {
-      return alert('通知は許可されませんでした。ブラウザの設定から変更できます。')
-    }
-
-    try {
-      const registration = await navigator.serviceWorker.register('/sw.js')
-      await navigator.serviceWorker.ready
-
-      const toUint8 = (base64: string) => {
-        const padding = '='.repeat((4 - (base64.length % 4)) % 4)
-        const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/')
-        const raw = atob(b64)
-        const output = new Uint8Array(raw.length)
-        for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i)
-        return output
-      }
-
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: toUint8(vapidKey),
-      })
-      const json = subscription.toJSON()
-      const { error } = await supabase.from('push_subscriptions').upsert(
-        {
-          user_id: session.user.id,
-          nickname: nickname.trim() || null,
-          endpoint: subscription.endpoint,
-          p256dh: json.keys?.p256dh,
-          auth: json.keys?.auth,
-        },
-        { onConflict: 'endpoint' }
-      )
-      if (error) throw error
-      alert('サイトを閉じている間も、コメントやメッセージを通知できるようにしました。')
-    } catch (error: any) {
-      alert('通知の登録に失敗しました。' + (error?.message ? authErrorJa(error.message) : ''))
-    }
-  }
-
   const openChatWith = (targetNick: string, e?: React.MouseEvent) => {
     if (e) {
       e.stopPropagation()
@@ -3128,8 +3075,7 @@ export default function App() {
               )}
             </div>
 
-            <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm space-y-2">
-              <div className="flex items-center justify-between gap-2">
+            <div className="bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between gap-2">
               <p className="text-[11px] text-slate-600 truncate min-w-0">
                 <span className="font-bold text-slate-800">{session.user.email}</span>
               </p>
@@ -3140,14 +3086,6 @@ export default function App() {
               >
                 <LogOut className="w-3.5 h-3.5" />
                 ログアウト
-              </button>
-              </div>
-              <button
-                type="button"
-                onClick={enableBrowserNotify}
-                className="w-full text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer text-left"
-              >
-                サイトを閉じているときの通知をオンにする
               </button>
             </div>
               </>
