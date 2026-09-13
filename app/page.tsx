@@ -230,6 +230,33 @@ const MAKER_OPTIONS = [
   'その他',
 ]
 
+function authErrorJa(raw: string) {
+  const text = raw || '不明なエラーです'
+  const lower = text.toLowerCase()
+  if (lower.includes('invalid login credentials')) return 'メールアドレスまたはパスワードが正しくありません。'
+  if (lower.includes('email not confirmed')) return 'メールアドレスの確認が完了していません。届いたメールのリンクを開いてください。'
+  if (lower.includes('user not found')) return 'このメールアドレスのアカウントは見つかりませんでした。'
+  if (lower.includes('over_email_send_rate_limit') || lower.includes('rate limit')) {
+    return 'メールの送信上限に達しました。しばらく待ってから再度お試しください。'
+  }
+  if (lower.includes('expired') || lower.includes('otp_expired') || lower.includes('access denied')) {
+    return 'リンクの有効期限が切れているか、無効です。もう一度パスワード再設定メールを送信してください。'
+  }
+  if (lower.includes('same_password') || lower.includes('same password') || lower.includes('should be different')) {
+    return '現在と同じパスワードは使えません。別のパスワードを設定してください。'
+  }
+  if (lower.includes('password should be at least') || lower.includes('weak')) {
+    return 'パスワードは6文字以上で、推測されにくいものにしてください。'
+  }
+  if (lower.includes('unable to validate email') || lower.includes('invalid email')) {
+    return 'メールアドレスの形式が正しくありません。'
+  }
+  if (lower.includes('error sending') && lower.includes('email')) {
+    return 'メールを送信できませんでした。しばらく待ってから再度お試しください。'
+  }
+  return text
+}
+
 const QUALIFICATION_OPTIONS = [
   '一級建築士',
   '二級建築士',
@@ -423,10 +450,15 @@ export default function App() {
   const [sendingChat, setSendingChat] = useState(false)
 
   const [session, setSession] = useState<Session | null>(null)
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
+  const [authMode, setAuthMode] = useState<'login' | 'signup' | 'reset'>('login')
   const [authEmail, setAuthEmail] = useState('')
   const [authPassword, setAuthPassword] = useState('')
   const [showAuthPassword, setShowAuthPassword] = useState(false)
+  const [passwordRecovery, setPasswordRecovery] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
+  const [showNewPassword, setShowNewPassword] = useState(false)
+  const [updatingPassword, setUpdatingPassword] = useState(false)
   const [authSubmitting, setAuthSubmitting] = useState(false)
   const [authMessage, setAuthMessage] = useState('')
   const [authNoticeKind, setAuthNoticeKind] = useState<'success' | 'warning'>('success')
@@ -486,19 +518,32 @@ export default function App() {
     } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession)
 
+      const isRecovery =
+        event === 'PASSWORD_RECOVERY' ||
+        (typeof window !== 'undefined' &&
+          (window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery')))
+
       if (typeof window !== 'undefined' && window.location.hash) {
         window.history.replaceState(null, '', window.location.pathname + window.location.search)
       }
 
       // onAuthStateChange 内で直接別の Auth API を呼ぶと固まるため、処理を後ろに回す
       window.setTimeout(() => {
+        if (isRecovery) {
+          setPasswordRecovery(true)
+          setActiveTab('mypage')
+          setAuthNoticeKind('success')
+          setAuthMessage('新しいパスワードを入力してください。')
+        }
+
         if (nextSession?.user) {
-          if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+          if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || isRecovery) {
             fetchUserProfile(nextSession.user)
           }
         } else {
           resetLocalProfile()
           if (event === 'SIGNED_OUT') {
+            setPasswordRecovery(false)
             fetchPosts(null)
           }
         }
@@ -530,11 +575,42 @@ export default function App() {
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!authEmail.trim() || !authPassword) {
-      return alert('メールアドレスとパスワードを入力してください')
+    if (!authEmail.trim()) {
+      setAuthNoticeKind('warning')
+      setAuthMessage('メールアドレスを入力してください。')
+      return
+    }
+    if (authMode === 'reset') {
+      setAuthSubmitting(true)
+      setAuthMessage('')
+      setCanResendSignupEmail(false)
+      try {
+        const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), {
+          redirectTo: window.location.origin,
+        })
+        if (error) throw error
+        setAuthNoticeKind('success')
+        setAuthMessage(
+          `${authEmail.trim()} 宛てに、パスワード再設定用のメールを送信しました。届いたメールのリンクを開いて、新しいパスワードを設定してください。迷惑メールフォルダもご確認ください。`
+        )
+      } catch (error: any) {
+        setAuthNoticeKind('warning')
+        setAuthMessage(authErrorJa(error?.message || 'メールを送信できませんでした。'))
+      } finally {
+        setAuthSubmitting(false)
+      }
+      return
+    }
+
+    if (!authPassword) {
+      setAuthNoticeKind('warning')
+      setAuthMessage('メールアドレスとパスワードを入力してください。')
+      return
     }
     if (authPassword.length < 6) {
-      return alert('パスワードは6文字以上にしてください')
+      setAuthNoticeKind('warning')
+      setAuthMessage('パスワードは6文字以上にしてください。')
+      return
     }
 
     setAuthSubmitting(true)
@@ -597,17 +673,49 @@ export default function App() {
       const friendly =
         raw.includes('Error sending confirmation email') || raw.includes('sending confirmation email')
           ? '確認メールを送れなかったため、会員登録できませんでした。Supabase の Authentication → Sign In / Providers で Confirm email をいったん OFF にするか、メール送信用の SMTP を設定してください。'
-          : raw
-      alert('認証エラー: ' + friendly)
+          : authErrorJa(raw)
+      setAuthNoticeKind('warning')
+      setAuthMessage(friendly)
     } finally {
       setAuthSubmitting(false)
+    }
+  }
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newPassword || newPassword.length < 6) {
+      setAuthNoticeKind('warning')
+      setAuthMessage('新しいパスワードは6文字以上にしてください。')
+      return
+    }
+    if (newPassword !== newPasswordConfirm) {
+      setAuthNoticeKind('warning')
+      setAuthMessage('パスワードが一致しません。同じパスワードを入力してください。')
+      return
+    }
+
+    setUpdatingPassword(true)
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword })
+      if (error) throw error
+      setPasswordRecovery(false)
+      setNewPassword('')
+      setNewPasswordConfirm('')
+      setAuthNoticeKind('success')
+      setAuthMessage('パスワードを変更しました。')
+      alert('パスワードを変更しました。')
+    } catch (error: any) {
+      setAuthNoticeKind('warning')
+      setAuthMessage(authErrorJa(error?.message || 'パスワードを変更できませんでした。'))
+    } finally {
+      setUpdatingPassword(false)
     }
   }
 
   const handleSignOut = async () => {
     const { error } = await supabase.auth.signOut()
     if (error) {
-      alert('ログアウトエラー: ' + error.message)
+      alert('ログアウトできませんでした。' + authErrorJa(error.message))
       return
     }
     setAuthEmail('')
@@ -2285,14 +2393,74 @@ export default function App() {
         {/* マイページタブ */}
         {activeTab === 'mypage' && (
           <div className="space-y-4">
-            {!session?.user && (
+            {passwordRecovery && (
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
+              <h2 className="font-bold text-base text-slate-700">新しいパスワードの設定</h2>
+              <p className="text-xs text-slate-500">メールのリンクから来ました。新しいパスワードを入力してください。</p>
+              <form onSubmit={handleUpdatePassword} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">新しいパスワード（6文字以上）</label>
+                  <div className="relative">
+                    <input
+                      type={showNewPassword ? 'text' : 'password'}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="新しいパスワード"
+                      autoComplete="new-password"
+                      className="w-full p-2 pr-10 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword((prev) => !prev)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      aria-label={showNewPassword ? 'パスワードを隠す' : 'パスワードを表示'}
+                    >
+                      {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">新しいパスワード（確認）</label>
+                  <input
+                    type={showNewPassword ? 'text' : 'password'}
+                    value={newPasswordConfirm}
+                    onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                    placeholder="もう一度入力"
+                    autoComplete="new-password"
+                    className="w-full p-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                {authMessage && (
+                  <div
+                    className={`text-xs font-medium p-3 rounded-lg border ${
+                      authNoticeKind === 'warning'
+                        ? 'bg-amber-50 border-amber-200 text-amber-800'
+                        : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    }`}
+                  >
+                    <p>{authMessage}</p>
+                  </div>
+                )}
+                <button
+                  type="submit"
+                  disabled={updatingPassword}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg text-xs transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {updatingPassword ? '変更中...' : 'パスワードを変更する'}
+                </button>
+              </form>
+            </div>
+            )}
+
+            {!session?.user && !passwordRecovery && (
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
               <h2 className="font-bold text-base text-slate-700 flex items-center gap-2">
                 <Mail className="w-5 h-5 text-indigo-600" />
-                会員登録・ログイン
+                {authMode === 'reset' ? 'パスワードの再設定' : '会員登録・ログイン'}
               </h2>
 
               <form onSubmit={handleAuthSubmit} className="space-y-3">
+                  {authMode !== 'reset' && (
                   <div className="flex rounded-lg overflow-hidden border border-slate-200">
                     <button
                       type="button"
@@ -2323,6 +2491,13 @@ export default function App() {
                       会員登録
                     </button>
                   </div>
+                  )}
+
+                  {authMode === 'reset' && (
+                    <p className="text-xs text-slate-500">
+                      登録したメールアドレスを入力してください。パスワード再設定用のリンクを送信します。
+                    </p>
+                  )}
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-500 mb-1">メールアドレス</label>
@@ -2330,12 +2505,13 @@ export default function App() {
                       type="email"
                       value={authEmail}
                       onChange={(e) => setAuthEmail(e.target.value)}
-                      placeholder="you@example.com"
+                      placeholder="メールアドレスを入力"
                       autoComplete="email"
                       className="w-full p-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
 
+                  {authMode !== 'reset' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-500 mb-1">パスワード（6文字以上）</label>
                     <div className="relative">
@@ -2343,7 +2519,7 @@ export default function App() {
                         type={showAuthPassword ? 'text' : 'password'}
                         value={authPassword}
                         onChange={(e) => setAuthPassword(e.target.value)}
-                        placeholder="パスワード"
+                        placeholder="パスワードを入力"
                         autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
                         className="w-full p-2 pr-10 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
@@ -2357,6 +2533,7 @@ export default function App() {
                       </button>
                     </div>
                   </div>
+                  )}
 
                   {authMessage && (
                     <div
@@ -2389,13 +2566,40 @@ export default function App() {
                       ? '処理中...'
                       : authMode === 'signup'
                       ? 'メールアドレスで会員登録'
+                      : authMode === 'reset'
+                      ? '再設定メールを送信'
                       : 'メールアドレスでログイン'}
                   </button>
+                  {authMode === 'login' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode('reset')
+                        setAuthMessage('')
+                        setAuthPassword('')
+                      }}
+                      className="w-full text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer"
+                    >
+                      パスワードをお忘れですか？
+                    </button>
+                  )}
+                  {authMode === 'reset' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode('login')
+                        setAuthMessage('')
+                      }}
+                      className="w-full text-[11px] font-bold text-slate-500 hover:underline cursor-pointer"
+                    >
+                      ログイン画面に戻る
+                    </button>
+                  )}
                 </form>
             </div>
             )}
 
-            {session?.user ? (
+            {session?.user && !passwordRecovery ? (
               <>
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
               <div className="flex items-start gap-4 border-b border-slate-100 pb-4">
@@ -2655,11 +2859,11 @@ export default function App() {
               </button>
             </div>
               </>
-            ) : (
+            ) : !passwordRecovery ? (
               <p className="text-xs text-slate-500 text-center px-2">
                 ログインすると、自分のプロフィール・投稿・いいねを管理できます。
               </p>
-            )}
+            ) : null}
 
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
               <button
