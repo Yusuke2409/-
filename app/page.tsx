@@ -319,11 +319,55 @@ function withPostMeta(post: {
   }
 }
 
-async function insertPostRow(payload: Record<string, unknown>) {
+function isMyLike(like: any, user: { id?: string; email?: string | null }, nick?: string) {
+  if (!like) return false
+  if (user.id && like.user_id && String(like.user_id) === String(user.id)) return true
+  if (user.email && like.user_email && String(like.user_email) === String(user.email)) return true
+  if (user.id && like.nickname && String(like.nickname) === String(user.id)) return true
+  if (user.email && like.nickname && String(like.nickname) === String(user.email)) return true
+  if (nick && like.nickname && like.nickname === nick) return true
+  return false
+}
+
+function likeOwnerKey(like: any) {
+  if (like?.user_id) return `id:${like.user_id}`
+  if (like?.user_email) return `em:${like.user_email}`
+  if (like?.nickname) return `nk:${like.nickname}`
+  return like?.id != null ? `row:${like.id}` : ''
+}
+
+function likedStorageKey(userId: string) {
+  return `madocomi_liked_${userId}`
+}
+
+function readStoredLikedIds(userId?: string | null) {
+  if (!userId || typeof window === 'undefined') return [] as number[]
+  try {
+    const raw = localStorage.getItem(likedStorageKey(userId))
+    if (!raw) return [] as number[]
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return [] as number[]
+    return parsed.map(Number).filter((id) => Number.isFinite(id))
+  } catch {
+    return [] as number[]
+  }
+}
+
+function writeStoredLikedIds(userId: string, ids: number[]) {
+  localStorage.setItem(likedStorageKey(userId), JSON.stringify([...new Set(ids)]))
+}
+
+function readLikedPostMap(user?: { user_metadata?: any } | null) {
+  const raw = user?.user_metadata?.liked_posts
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {} as Record<string, number>
+  return { ...raw } as Record<string, number>
+}
+
+async function insertRow(table: string, payload: Record<string, unknown>, failMessage: string) {
   const current: Record<string, unknown> = { ...payload }
   for (let i = 0; i < 12; i++) {
-    const { error } = await supabase.from('posts').insert([current])
-    if (!error) return
+    const { data, error } = await supabase.from(table).insert([current]).select('id')
+    if (!error) return data?.[0] ?? { id: undefined }
     const column = missingColumnFromError(error.message)
     if (column && column in current) {
       delete current[column]
@@ -331,10 +375,20 @@ async function insertPostRow(payload: Record<string, unknown>) {
     }
     throw error
   }
-  throw new Error('投稿に失敗しました')
+  throw new Error(failMessage)
 }
 
-function ImageCarousel({ images }: { images: string[] }) {
+async function insertPostRow(payload: Record<string, unknown>) {
+  await insertRow('posts', payload, '投稿に失敗しました')
+}
+
+function ImageCarousel({
+  images,
+  onOpenLightbox,
+}: {
+  images: string[]
+  onOpenLightbox?: (index: number) => void
+}) {
   const [currentIndex, setCurrentIndex] = useState(0)
 
   if (!images || images.length === 0) return null
@@ -350,22 +404,30 @@ function ImageCarousel({ images }: { images: string[] }) {
   }
 
   return (
-    <div className="relative w-full bg-slate-100 overflow-hidden group">
+    <div
+      className="relative w-full bg-slate-100 overflow-hidden group"
+      onClick={(e) => {
+        e.stopPropagation()
+        onOpenLightbox?.(currentIndex)
+      }}
+    >
       <img
         src={images[currentIndex]}
         alt={`図面 ${currentIndex + 1}`}
-        className="w-full h-auto max-h-96 object-contain mx-auto transition-all duration-300"
+        className="w-full h-auto max-h-96 object-contain mx-auto transition-all duration-300 cursor-zoom-in"
       />
 
       {images.length > 1 && (
         <>
           <button
+            type="button"
             onClick={prevImage}
             className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-full transition-opacity opacity-80 hover:opacity-100"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
           <button
+            type="button"
             onClick={nextImage}
             className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-full transition-opacity opacity-80 hover:opacity-100"
           >
@@ -383,6 +445,205 @@ function ImageCarousel({ images }: { images: string[] }) {
             ))}
           </div>
         </>
+      )}
+    </div>
+  )
+}
+
+function ImageLightbox({
+  images,
+  startIndex,
+  onClose,
+}: {
+  images: string[]
+  startIndex: number
+  onClose: () => void
+}) {
+  const [index, setIndex] = useState(startIndex)
+  const startX = useRef<number | null>(null)
+  const moved = useRef(false)
+
+  useEffect(() => {
+    setIndex(Math.min(Math.max(startIndex, 0), images.length - 1))
+  }, [startIndex, images])
+
+  useEffect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      if (e.key === 'ArrowRight' && images.length > 1) {
+        setIndex((i) => (i + 1) % images.length)
+      }
+      if (e.key === 'ArrowLeft' && images.length > 1) {
+        setIndex((i) => (i - 1 + images.length) % images.length)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = prev
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [images.length, onClose])
+
+  const go = (dir: number) => {
+    if (images.length < 2) return
+    setIndex((i) => (i + dir + images.length) % images.length)
+  }
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    startX.current = e.clientX
+    moved.current = false
+  }
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (startX.current == null) return
+    if (Math.abs(e.clientX - startX.current) > 8) moved.current = true
+  }
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    if (startX.current == null) return
+    const dx = e.clientX - startX.current
+    startX.current = null
+    if (dx > 50) go(-1)
+    else if (dx < -50) go(1)
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] bg-black/92 flex items-center justify-center touch-none"
+      onClick={() => {
+        if (!moved.current) onClose()
+      }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={() => {
+        startX.current = null
+      }}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          onClose()
+        }}
+        className="absolute top-3 right-3 z-10 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full cursor-pointer"
+        aria-label="閉じる"
+      >
+        <X className="w-6 h-6" />
+      </button>
+
+      {images.length > 1 && (
+        <>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              go(-1)
+            }}
+            className="absolute left-2 md:left-4 z-10 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full cursor-pointer"
+            aria-label="前の画像"
+          >
+            <ChevronLeft className="w-7 h-7" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              go(1)
+            }}
+            className="absolute right-2 md:right-4 z-10 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full cursor-pointer"
+            aria-label="次の画像"
+          >
+            <ChevronRight className="w-7 h-7" />
+          </button>
+        </>
+      )}
+
+      <img
+        src={images[index]}
+        alt={`拡大画像 ${index + 1}`}
+        className="max-w-[100vw] max-h-[100dvh] object-contain select-none pointer-events-none"
+        draggable={false}
+      />
+
+      {images.length > 1 && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1.5 bg-black/40 px-2 py-1.5 rounded-full">
+          {images.map((_, idx) => (
+            <span
+              key={idx}
+              className={`w-2 h-2 rounded-full ${idx === index ? 'bg-white' : 'bg-white/40'}`}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ExpandableText({
+  text,
+  className = '',
+  maxLines = 7,
+}: {
+  text: string
+  className?: string
+  maxLines?: number
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [overflows, setOverflows] = useState(false)
+  const textRef = useRef<HTMLParagraphElement>(null)
+
+  useEffect(() => {
+    setExpanded(false)
+    setOverflows(false)
+  }, [text])
+
+  useEffect(() => {
+    const el = textRef.current
+    if (!el || expanded) return
+    const check = () => {
+      setOverflows(el.scrollHeight > el.clientHeight + 1)
+    }
+    check()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(check) : null
+    ro?.observe(el)
+    return () => ro?.disconnect()
+  }, [text, expanded])
+
+  if (!text) return null
+
+  return (
+    <div>
+      <p
+        ref={textRef}
+        className={`whitespace-pre-wrap break-words ${expanded ? '' : 'line-clamp-7'} ${className}`}
+        style={
+          expanded
+            ? undefined
+            : {
+                display: '-webkit-box',
+                WebkitLineClamp: maxLines,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+              }
+        }
+      >
+        {text}
+      </p>
+      {overflows && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+            setExpanded((open) => !open)
+          }}
+          className="mt-1 text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer"
+        >
+          {expanded ? '閉じる' : 'さらに表示'}
+        </button>
       )}
     </div>
   )
@@ -449,6 +710,7 @@ export default function App() {
   const [dislikedCommentIds, setDislikedCommentIds] = useState<number[]>([])
   const [expandedCommentIds, setExpandedCommentIds] = useState<number[]>([])
   const [selectedPost, setSelectedPost] = useState<Post | null>(null)
+  const [imageLightbox, setImageLightbox] = useState<{ images: string[]; index: number } | null>(null)
 
   const [viewUserProfile, setViewUserProfile] = useState<UserProfileView | null>(null)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
@@ -525,6 +787,7 @@ export default function App() {
   const messageHydrated = useRef(false)
   const prevUnreadComment = useRef(0)
   const prevUnreadChat = useRef(0)
+  const likeInFlight = useRef<Set<number>>(new Set())
 
   useEffect(() => {
     fetchPosts(null)
@@ -1019,23 +1282,37 @@ export default function App() {
     }
 
     const likeCounts: { [key: number]: number } = {}
+    const likeOwners: { [key: number]: Set<string> } = {}
     const userLikedIds: number[] = []
     const currentNick = userNick ?? nickname
+    const storedLikedIds = readStoredLikedIds(authUser?.id)
+    const hasStoredLikedIds = !!(
+      authUser?.id &&
+      typeof window !== 'undefined' &&
+      localStorage.getItem(likedStorageKey(authUser.id)) != null
+    )
 
     if (likesData) {
       likesData.forEach((like: any) => {
-        likeCounts[like.post_id] = (likeCounts[like.post_id] || 0) + 1
+        const owners = likeOwners[like.post_id] || new Set<string>()
+        const ownerKey = likeOwnerKey(like)
+        if (ownerKey && !owners.has(ownerKey)) {
+          owners.add(ownerKey)
+          likeOwners[like.post_id] = owners
+          likeCounts[like.post_id] = owners.size
+        }
 
         if (!authUser) return
 
-        const isMine =
-          (like.user_id && like.user_id === authUser.id) ||
-          (like.user_email && like.user_email === authUser.email) ||
-          (!like.user_id && !like.user_email && currentNick && like.nickname === currentNick)
-
-        if (isMine && !userLikedIds.includes(like.post_id)) {
+        if (isMyLike(like, authUser, currentNick) && !userLikedIds.includes(like.post_id)) {
           userLikedIds.push(like.post_id)
         }
+      })
+    }
+
+    if (hasStoredLikedIds) {
+      storedLikedIds.forEach((postId) => {
+        if (!userLikedIds.includes(postId)) userLikedIds.push(postId)
       })
     }
 
@@ -1306,43 +1583,81 @@ export default function App() {
       return
     }
 
-    const isLiked = likedPostIds.includes(postId)
+    if (likeInFlight.current.has(postId)) return
+    likeInFlight.current.add(postId)
 
-    if (isLiked) {
-      const { error } = await supabase
-        .from('likes')
-        .delete()
-        .eq('post_id', postId)
-        .eq('user_id', session.user.id)
+    const user = session.user
+    const likedMap = readLikedPostMap(user)
+    const postKey = String(postId)
+    const willLike = !likedPostIds.includes(postId)
+    const nextLikedIds = willLike
+      ? likedPostIds.includes(postId)
+        ? likedPostIds
+        : [...likedPostIds, postId]
+      : likedPostIds.filter((id) => id !== postId)
 
-      if (error) {
-        await supabase.from('likes').delete().eq('post_id', postId).eq('nickname', nickname)
-      }
-    } else {
-      const { error } = await supabase.from('likes').insert([
-        {
-          post_id: postId,
-          user_id: session.user.id,
-          user_email: session.user.email,
-          nickname: nickname,
-        },
-      ])
-
-      if (error) {
-        const { error: fallbackError } = await supabase.from('likes').insert([
-          {
-            post_id: postId,
-            nickname: nickname,
-          },
-        ])
-        if (fallbackError) {
-          alert('いいねの保存に失敗しました: ' + fallbackError.message)
-          return
-        }
-      }
+    const bumpPosts = (liked: boolean) => {
+      const delta = liked ? 1 : -1
+      const update = (list: Post[]) =>
+        list.map((p) =>
+          p.id === postId ? { ...p, likes_count: Math.max(0, (p.likes_count || 0) + delta) } : p
+        )
+      setPosts(update)
+      setFilteredPosts(update)
+      setSelectedPost((p) =>
+        p && p.id === postId ? { ...p, likes_count: Math.max(0, (p.likes_count || 0) + delta) } : p
+      )
+      setLikedPostIds(nextLikedIds)
+      writeStoredLikedIds(user.id, nextLikedIds)
     }
 
-    fetchPosts(session.user, nickname)
+    bumpPosts(willLike)
+
+    try {
+      const { data: existingLikes } = await supabase.from('likes').select('*').eq('post_id', postId)
+      const mine = (existingLikes || []).filter(
+        (like: any) => isMyLike(like, user, nickname) || (likedMap[postKey] != null && like.id === likedMap[postKey])
+      )
+
+      if (!willLike) {
+        for (const row of mine) {
+          if (row?.id != null) await supabase.from('likes').delete().eq('id', row.id)
+        }
+        await supabase.from('likes').delete().eq('post_id', postId).eq('user_id', user.id)
+        if (user.email) {
+          await supabase.from('likes').delete().eq('post_id', postId).eq('user_email', user.email)
+        }
+        if (likedMap[postKey] != null) {
+          await supabase.from('likes').delete().eq('id', likedMap[postKey])
+        }
+        delete likedMap[postKey]
+      } else if (mine.length === 0) {
+        const inserted = await insertRow(
+          'likes',
+          {
+            post_id: postId,
+            user_id: user.id,
+            user_email: user.email,
+            nickname: nickname || user.id,
+          },
+          'いいねの保存に失敗しました'
+        )
+        if (inserted?.id != null) likedMap[postKey] = inserted.id
+      } else if (mine[0]?.id != null) {
+        likedMap[postKey] = mine[0].id
+      }
+
+      await supabase.auth.updateUser({ data: { liked_posts: likedMap } })
+      writeStoredLikedIds(user.id, nextLikedIds)
+      setLikedPostIds(nextLikedIds)
+    } catch (error: any) {
+      alert('いいねの保存に失敗しました: ' + (error?.message || ''))
+      writeStoredLikedIds(user.id, likedPostIds)
+      setLikedPostIds(likedPostIds)
+      await fetchPosts(user, nickname)
+    } finally {
+      likeInFlight.current.delete(postId)
+    }
   }
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1915,26 +2230,28 @@ export default function App() {
           )}
         </div>
 
-        <p className="text-xs text-slate-700 whitespace-pre-wrap pl-9">{c.content}</p>
+        <div className="pl-9">
+          <ExpandableText text={c.content} className="text-xs text-slate-700" />
+        </div>
 
         <div className="flex items-center gap-3 pt-0.5 pl-9">
           <button
             onClick={() => handleCommentReaction(c.id, 'like')}
             className={`flex items-center gap-1 text-[11px] font-medium transition-colors cursor-pointer ${
-              isLiked ? 'text-indigo-600 font-bold' : 'text-slate-400 hover:text-slate-600'
+              isLiked ? 'text-red-500 font-bold' : 'text-slate-400 hover:text-slate-600'
             }`}
           >
-            <ThumbsUp className={`w-3.5 h-3.5 ${isLiked ? 'fill-indigo-600' : ''}`} />
+            <ThumbsUp className={`w-3.5 h-3.5 ${isLiked ? 'fill-red-500' : ''}`} />
             {displayLikes > 0 && <span>{displayLikes}</span>}
           </button>
 
           <button
             onClick={() => handleCommentReaction(c.id, 'dislike')}
             className={`flex items-center gap-1 text-[11px] font-medium transition-colors cursor-pointer ${
-              isDisliked ? 'text-rose-600 font-bold' : 'text-slate-400 hover:text-slate-600'
+              isDisliked ? 'text-indigo-600 font-bold' : 'text-slate-400 hover:text-slate-600'
             }`}
           >
-            <ThumbsDown className={`w-3.5 h-3.5 ${isDisliked ? 'fill-rose-600' : ''}`} />
+            <ThumbsDown className={`w-3.5 h-3.5 ${isDisliked ? 'fill-indigo-600' : ''}`} />
             {displayDislikes > 0 && <span>{displayDislikes}</span>}
           </button>
         </div>
@@ -2110,9 +2427,9 @@ export default function App() {
                 <textarea
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
-                  placeholder="アドバイスしてほしい点などを入力"
-                  rows={2}
-                  className="w-full p-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="アドバイスしてほしい点などを入力（改行できます）"
+                  rows={4}
+                  className="w-full p-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 whitespace-pre-wrap resize-y min-h-[88px]"
                 />
               </div>
 
@@ -2203,10 +2520,15 @@ export default function App() {
 
                     <PostMetaTags post={post} className="px-3" />
 
-                    <ImageCarousel images={post.image_urls} />
+                    <ImageCarousel
+                      images={post.image_urls}
+                      onOpenLightbox={(index) => setImageLightbox({ images: post.image_urls, index })}
+                    />
 
                     <div className="px-3 pb-3 space-y-2">
-                      {post.comment && <p className="text-sm text-slate-700 line-clamp-2">{post.comment}</p>}
+                      {post.comment && (
+                        <ExpandableText text={post.comment} className="text-sm text-slate-700" />
+                      )}
 
                       <div className="flex items-center gap-6 pt-2 text-xs text-slate-500 border-t border-slate-100">
                         <button
@@ -2382,9 +2704,14 @@ export default function App() {
                     }}
                     className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm cursor-pointer hover:border-slate-300"
                   >
-                    <ImageCarousel images={post.image_urls} />
+                    <ImageCarousel
+                      images={post.image_urls}
+                      onOpenLightbox={(index) => setImageLightbox({ images: post.image_urls, index })}
+                    />
                     <div className="p-3 space-y-2">
-                      {post.comment && <p className="text-sm text-slate-700 line-clamp-2">{post.comment}</p>}
+                      {post.comment && (
+                        <ExpandableText text={post.comment} className="text-sm text-slate-700" />
+                      )}
                       <div className="flex items-center gap-4 text-xs text-slate-500 pt-1">
                         <button
                           type="button"
@@ -2440,9 +2767,14 @@ export default function App() {
                   }}
                   className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm cursor-pointer hover:border-slate-300"
                 >
-                  <ImageCarousel images={post.image_urls} />
+                  <ImageCarousel
+                    images={post.image_urls}
+                    onOpenLightbox={(index) => setImageLightbox({ images: post.image_urls, index })}
+                  />
                   <div className="p-3 space-y-2">
-                    {post.comment && <p className="text-sm text-slate-700 line-clamp-2">{post.comment}</p>}
+                    {post.comment && (
+                      <ExpandableText text={post.comment} className="text-sm text-slate-700" />
+                    )}
                   </div>
                 </div>
               ))
@@ -3279,14 +3611,17 @@ export default function App() {
             </div>
 
             <div className="overflow-y-auto flex-1 p-4 space-y-4">
-              <ImageCarousel images={selectedPost.image_urls} />
+              <ImageCarousel
+                images={selectedPost.image_urls}
+                onOpenLightbox={(index) => setImageLightbox({ images: selectedPost.image_urls, index })}
+              />
 
               <PostMetaTags post={selectedPost} />
 
               {selectedPost.comment && (
-                <p className="text-sm text-slate-800 whitespace-pre-wrap bg-slate-50 p-3 rounded-lg border border-slate-100">
-                  {selectedPost.comment}
-                </p>
+                <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                  <ExpandableText text={selectedPost.comment} className="text-sm text-slate-800" />
+                </div>
               )}
 
               <div className="space-y-3 pt-2">
@@ -3349,18 +3684,28 @@ export default function App() {
                   </button>
                 </div>
               )}
-              <div className="flex gap-2">
-                <input
-                  type="text"
+              <div className="flex gap-2 items-end">
+                <textarea
                   value={modalCommentInput}
                   onChange={(e) => setModalCommentInput(e.target.value)}
-                  placeholder={replyTarget ? '返信を入力...' : 'コメントを入力...'}
-                  className="flex-1 p-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder={
+                    replyTarget
+                      ? '返信を入力（改行できます。送信は右のボタン）'
+                      : 'コメントを入力（改行できます。送信は右のボタン）'
+                  }
+                  rows={3}
+                  className="flex-1 p-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 whitespace-pre-wrap resize-y min-h-[72px]"
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleAddModalComment(selectedPost.id)
+                    if (e.key !== 'Enter') return
+                    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                    if (e.ctrlKey || e.metaKey) {
+                      e.preventDefault()
+                      handleAddModalComment(selectedPost.id)
+                    }
                   }}
                 />
                 <button
+                  type="button"
                   onClick={() => handleAddModalComment(selectedPost.id)}
                   className="bg-indigo-600 text-white p-2 rounded-lg hover:bg-indigo-700 transition-colors shrink-0 cursor-pointer"
                 >
@@ -3523,6 +3868,13 @@ export default function App() {
           </button>
         </div>
       </nav>
+      {imageLightbox && (
+        <ImageLightbox
+          images={imageLightbox.images}
+          startIndex={imageLightbox.index}
+          onClose={() => setImageLightbox(null)}
+        />
+      )}
     </div>
   )
 }
