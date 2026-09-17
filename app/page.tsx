@@ -363,6 +363,15 @@ function readLikedPostMap(user?: { user_metadata?: any } | null) {
   return { ...raw } as Record<string, number>
 }
 
+function shuffleList<T>(items: T[]) {
+  const next = [...items]
+  for (let i = next.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[next[i], next[j]] = [next[j], next[i]]
+  }
+  return next
+}
+
 async function insertRow(table: string, payload: Record<string, unknown>, failMessage: string) {
   const current: Record<string, unknown> = { ...payload }
   for (let i = 0; i < 12; i++) {
@@ -379,7 +388,7 @@ async function insertRow(table: string, payload: Record<string, unknown>, failMe
 }
 
 async function insertPostRow(payload: Record<string, unknown>) {
-  await insertRow('posts', payload, '投稿に失敗しました')
+  return insertRow('posts', payload, '投稿に失敗しました')
 }
 
 function ImageCarousel({
@@ -931,6 +940,8 @@ export default function App() {
   const prevUnreadComment = useRef(0)
   const prevUnreadChat = useRef(0)
   const likeInFlight = useRef<Set<number>>(new Set())
+  const searchOrderRef = useRef<number[]>([])
+  const searchFilterKeyRef = useRef('')
 
   useEffect(() => {
     fetchPosts(null)
@@ -982,6 +993,10 @@ export default function App() {
   useEffect(() => {
     applyFilter()
   }, [posts, searchDocType, searchLayout, searchFloors, searchFloorAreaMin, searchFloorAreaMax, searchMakers])
+
+  useEffect(() => {
+    if (activeTab === 'search') applyFilter(true)
+  }, [activeTab])
 
   useEffect(() => {
     if (session?.user?.email && !contactEmail) {
@@ -1689,7 +1704,7 @@ export default function App() {
     e.target.value = ''
   }
 
-  const applyFilter = () => {
+  const applyFilter = (reshuffle = false) => {
     let result = [...posts]
 
     if (searchDocType !== 'すべて') {
@@ -1715,7 +1730,32 @@ export default function App() {
       })
     }
 
-    setFilteredPosts(result)
+    const filterKey = JSON.stringify({
+      searchDocType,
+      searchLayout,
+      searchFloors,
+      searchFloorAreaMin,
+      searchFloorAreaMax,
+      searchMakers,
+    })
+    const byId = new Map(result.map((p) => [p.id, p]))
+
+    if (reshuffle || filterKey !== searchFilterKeyRef.current || searchOrderRef.current.length === 0) {
+      searchFilterKeyRef.current = filterKey
+      result = shuffleList(result)
+      searchOrderRef.current = result.map((p) => p.id)
+      setFilteredPosts(result)
+      return
+    }
+
+    const kept = searchOrderRef.current.filter((id) => byId.has(id))
+    const newcomers = shuffleList(result.filter((p) => !kept.includes(p.id)))
+    const order = [...kept]
+    newcomers.forEach((p) => {
+      order.splice(Math.floor(Math.random() * (order.length + 1)), 0, p.id)
+    })
+    searchOrderRef.current = order
+    setFilteredPosts(order.map((id) => byId.get(id)!).filter(Boolean))
   }
 
   const handleToggleLike = async (postId: number, e?: React.MouseEvent) => {
@@ -1941,7 +1981,14 @@ export default function App() {
         user_email: session.user.email,
       }
 
-      await insertPostRow(postPayload)
+      const inserted = await insertPostRow(postPayload)
+      if (inserted?.id) {
+        fetch('/api/official-comments/schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ postId: inserted.id }),
+        }).catch(() => {})
+      }
 
       setSelectedFiles([])
       setPreviewUrls([])
@@ -2847,10 +2894,17 @@ export default function App() {
                     }}
                     className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm cursor-pointer hover:border-slate-300"
                   >
-                    <ImageCarousel
-                      images={post.image_urls}
-                      onOpenLightbox={(index) => setImageLightbox({ images: post.image_urls, index })}
-                    />
+                    <div className="relative">
+                      <ImageCarousel
+                        images={post.image_urls}
+                        onOpenLightbox={(index) => setImageLightbox({ images: post.image_urls, index })}
+                      />
+                      {postComments.length === 0 && (
+                        <span className="absolute top-2 left-2 z-[1] bg-rose-500 text-white text-[11px] font-bold px-2.5 py-1 rounded-full shadow-md">
+                          コメント求む
+                        </span>
+                      )}
+                    </div>
                     <div className="p-3 space-y-2">
                       {post.comment && (
                         <ExpandableText text={post.comment} className="text-sm text-slate-700" />
@@ -2864,10 +2918,17 @@ export default function App() {
                           <Heart className={`w-4 h-4 ${isLiked ? 'text-red-500 fill-red-500' : ''}`} />
                           {post.likes_count || 0}
                         </button>
-                        <span className="flex items-center gap-1">
-                          <MessageCircle className="w-4 h-4" />
-                          {postComments.length}
-                        </span>
+                        {postComments.length === 0 ? (
+                          <span className="flex items-center gap-1 font-bold text-rose-500">
+                            <MessageCircle className="w-4 h-4" />
+                            コメント求む
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1">
+                            <MessageCircle className="w-4 h-4" />
+                            {postComments.length}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
