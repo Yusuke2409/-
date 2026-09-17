@@ -2899,7 +2899,7 @@ export default function App() {
                         images={post.image_urls}
                         onOpenLightbox={(index) => setImageLightbox({ images: post.image_urls, index })}
                       />
-                      {postComments.length === 0 && (
+                      {postComments.length < 15 && (
                         <span className="absolute top-2 left-2 z-[1] bg-rose-500 text-white text-[11px] font-bold px-2.5 py-1 rounded-full shadow-md">
                           コメント求む
                         </span>
@@ -2918,10 +2918,11 @@ export default function App() {
                           <Heart className={`w-4 h-4 ${isLiked ? 'text-red-500 fill-red-500' : ''}`} />
                           {post.likes_count || 0}
                         </button>
-                        {postComments.length === 0 ? (
+                        {postComments.length < 15 ? (
                           <span className="flex items-center gap-1 font-bold text-rose-500">
                             <MessageCircle className="w-4 h-4" />
                             コメント求む
+                            {postComments.length > 0 ? ` ${postComments.length}` : ''}
                           </span>
                         ) : (
                           <span className="flex items-center gap-1">
