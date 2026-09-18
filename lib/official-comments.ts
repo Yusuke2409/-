@@ -69,7 +69,7 @@ function stripPostMeta(comment: string) {
 }
 
 const FALLBACK_COMMENTS = [
-  '収納多くて使いやすそう！',
+  '収納多くて使いやすそう',
   '動線きれいですね',
   '洗面の位置もう少し右が良さげ',
   'LDK広くていい感じ',
@@ -78,7 +78,7 @@ const FALLBACK_COMMENTS = [
   '窓の位置いいカモ',
   '廊下ちょっと長めかな',
   'キッチン対面で良さそう',
-  '家事動線よさげ！',
+  '家事動線よさげ',
   'トイレ位置ちょっと気になる',
   'WICあるの羨ましい',
   '動線スムーズで良い',
@@ -92,10 +92,22 @@ const FALLBACK_COMMENTS = [
 ]
 
 function cleanComment(text: string) {
-  const value = (text || '').replace(/\s+/g, '').trim()
+  const value = (text || '').replace(/\s+/g, '').replace(/!+/g, '！').trim()
   if (value.length < 8) return ''
   if (value.length > 22) return value.slice(0, 20)
   return value
+}
+
+function limitExclamationMarks(comments: string[]) {
+  let kept = false
+  return comments.map((item) => {
+    if (!item.includes('！')) return item
+    if (!kept && Math.random() < 0.12) {
+      kept = true
+      return item.replace(/！{2,}/g, '！')
+    }
+    return item.replace(/！+/g, '')
+  })
 }
 
 async function generateWithOpenAI(args: {
@@ -119,6 +131,8 @@ ${args.comment || '（説明なし）'}
 - 良い点か「ここはこうしたらもっと良さそう」の軽い指摘
 - 同じ内容を繰り返さない
 - 専門家っぽい堅い言い方は禁止
+- 「！」はほぼ使わない（${args.count}個のうち多くて1個。残りは「。」なし、または「かな」「かも」「ね」）
+- 「！！」「！？」は禁止
 JSONだけ返す: {"comments":["...", "..."]}`,
     },
   ]
@@ -154,7 +168,9 @@ JSONだけ返す: {"comments":["...", "..."]}`,
   try {
     const parsed = JSON.parse(raw)
     const list = Array.isArray(parsed?.comments) ? parsed.comments : []
-    return list.map((item: unknown) => cleanComment(String(item))).filter(Boolean)
+    return limitExclamationMarks(
+      list.map((item: unknown) => cleanComment(String(item))).filter(Boolean),
+    )
   } catch {
     return []
   }
@@ -173,7 +189,7 @@ export async function makeOfficialComments(args: {
     unique.push(item)
     if (unique.length >= wanted) break
   }
-  return { comments: unique, aiCount: fromAi.length }
+  return { comments: limitExclamationMarks(unique), aiCount: fromAi.length }
 }
 
 export async function loadOfficialAccounts(supabase: SupabaseClient) {
