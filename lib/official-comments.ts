@@ -110,10 +110,12 @@ async function generateWithOpenAI(args: {
     {
       type: 'text',
       text: `間取り投稿への短い感想を${args.count}個作って。
-投稿説明: ${args.comment || '（説明なし）'}
+投稿者の説明・コメント（必ず内容を踏まえる）:
+${args.comment || '（説明なし）'}
 条件:
 - 日本語、ラフな口調（友達に話す感じ）
 - 1つあたり10〜20文字
+- 画像と投稿者の説明の両方を見て書く。説明に書いてある悩みや希望には、いくつか返事する
 - 良い点か「ここはこうしたらもっと良さそう」の軽い指摘
 - 同じ内容を繰り返さない
 - 専門家っぽい堅い言い方は禁止
@@ -133,6 +135,7 @@ JSONだけ返す: {"comments":["...", "..."]}`,
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
+    signal: AbortSignal.timeout(12000),
     body: JSON.stringify({
       model: 'gpt-4o-mini',
       temperature: 0.9,
@@ -141,7 +144,10 @@ JSONだけ返す: {"comments":["...", "..."]}`,
       messages: [{ role: 'user', content }],
     }),
   })
-  if (!res.ok) return []
+  if (!res.ok) {
+    console.error('official-comments openai failed', res.status)
+    return []
+  }
   const data = await res.json()
   const raw = data?.choices?.[0]?.message?.content
   if (!raw) return []
@@ -167,7 +173,7 @@ export async function makeOfficialComments(args: {
     unique.push(item)
     if (unique.length >= wanted) break
   }
-  return unique
+  return { comments: unique, aiCount: fromAi.length }
 }
 
 export async function loadOfficialAccounts(supabase: SupabaseClient) {
@@ -216,40 +222,61 @@ export async function scheduleOfficialComments(postId: number) {
     return { ok: true, skipped: 'already_scheduled' as const }
   }
 
-  const accounts = await loadOfficialAccounts(supabase)
-  if (accounts.length === 0) {
-    return { ok: false, skipped: 'no_official_accounts' as const }
-  }
-
-  const pickCount = Math.min(accounts.length, randInt(10, 20))
-  const picked = shufflePick(accounts, pickCount)
+  const pickCount = randInt(10, 20)
+  const pickedEmails = shufflePick(officialEmailList(), pickCount)
+  const picked = pickedEmails.map((email) => ({
+    email,
+    nickname: nicknameFromOfficialEmail(email),
+  }))
   const images: string[] = Array.isArray(post.image_urls)
     ? post.image_urls
     : post.image_url
       ? [post.image_url]
       : []
-  const comments = await makeOfficialComments({
-    count: picked.length,
-    comment: stripPostMeta(String(post.comment || '')),
-    imageUrl: images[0],
-  })
   const runAts = staggerRunTimes(picked.length)
-
   const rows = picked.map((account, index) => ({
     post_id: postId,
     account_email: account.email,
     nickname: account.nickname,
-    content: comments[index] || FALLBACK_COMMENTS[index % FALLBACK_COMMENTS.length],
+    content: FALLBACK_COMMENTS[index % FALLBACK_COMMENTS.length],
     run_at: runAts[index].toISOString(),
     status: 'pending',
   }))
 
-  const { error: insertError } = await supabase.from('official_comment_jobs').insert(rows)
+  const { data: insertedJobs, error: insertError } = await supabase
+    .from('official_comment_jobs')
+    .insert(rows)
+    .select('id')
   if (insertError) {
     return { ok: false, skipped: 'jobs_table' as const, error: insertError.message }
   }
 
-  return { ok: true, scheduled: rows.length }
+  let aiCount = 0
+  try {
+    const generated = await makeOfficialComments({
+      count: picked.length,
+      comment: stripPostMeta(String(post.comment || '')),
+      imageUrl: images[0],
+    })
+    aiCount = generated.aiCount
+    const jobs = insertedJobs || []
+    for (let i = 0; i < jobs.length; i++) {
+      const content = generated.comments[i]
+      if (!content || !jobs[i]?.id) continue
+      await supabase.from('official_comment_jobs').update({ content }).eq('id', jobs[i].id)
+    }
+  } catch (error) {
+    console.error('official-comments openai skipped after schedule', error)
+  }
+
+  const result = {
+    ok: true as const,
+    scheduled: rows.length,
+    openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    aiCount,
+  }
+  console.log('official-comments scheduled', result)
+  return result
 }
 
 export async function postDueOfficialComments() {
