@@ -1,8 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/official-comments/run",
-      "schedule": "0 0 * * *"
-    }
-  ]
-}
+{}
