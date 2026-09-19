@@ -2,6 +2,14 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import {
+  attachAccountToUserRow,
+  bindContentToAccount,
+  claimOwnedContent,
+  isOwnedByAccount,
+  profileFromUsers,
+  savePublicUserRow,
+} from '@/lib/user-identity'
 import type { Session } from '@supabase/supabase-js'
 import {
   Home,
@@ -54,6 +62,7 @@ type Post = {
   bio?: string
   likes_count?: number
   user_id?: string
+  user_email?: string
   floor_area_min?: number | null
   floor_area_max?: number | null
 }
@@ -70,6 +79,8 @@ type Comment = {
   parent_id?: number | null
   likes_count?: number
   dislikes_count?: number
+  user_id?: string
+  user_email?: string
 }
 
 type UserQualification = {
@@ -79,6 +90,8 @@ type UserQualification = {
   qualification_name: string
   cert_image_url?: string
   status: 'pending' | 'approved' | 'rejected'
+  user_id?: string
+  user_email?: string
 }
 
 type UserProfileView = {
@@ -86,6 +99,8 @@ type UserProfileView = {
   avatar_url?: string
   user_urls?: string[]
   bio?: string
+  user_id?: string
+  user_email?: string
 }
 
 type ChatMessage = {
@@ -334,6 +349,35 @@ function likeOwnerKey(like: any) {
   if (like?.user_email) return `em:${like.user_email}`
   if (like?.nickname) return `nk:${like.nickname}`
   return like?.id != null ? `row:${like.id}` : ''
+}
+
+function isApprovedQualStatus(status?: string | null) {
+  const value = String(status || '').trim().toLowerCase()
+  return value === 'approved' || value === 'approve' || value.includes('承認')
+}
+
+function isPendingQualStatus(status?: string | null) {
+  const value = String(status || '').trim().toLowerCase()
+  return value === 'pending' || value === 'review' || value.includes('審査') || value.includes('確認')
+}
+
+function nickHistoryKey(userId?: string | null) {
+  return userId ? `madocomi_nicks_${userId}` : ''
+}
+
+function readNickHistory(userId?: string | null) {
+  const key = nickHistoryKey(userId)
+  if (!key || typeof window === 'undefined') return [] as string[]
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || '[]')
+    return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : []
+  } catch {
+    return []
+  }
+}
+
+function writeNickHistory(userId: string, nicks: string[]) {
+  localStorage.setItem(nickHistoryKey(userId), JSON.stringify([...new Set(nicks.filter(Boolean))]))
 }
 
 function likedStorageKey(userId: string) {
@@ -897,6 +941,7 @@ export default function App() {
 
   // プロフィール状態
   const [nickname, setNickname] = useState('')
+  const [accountNicks, setAccountNicks] = useState<string[]>([])
   const [avatarUrl, setAvatarUrl] = useState<string>('')
   const [bio, setBio] = useState<string>('')
   const [userUrls, setUserUrls] = useState<string[]>([''])
@@ -936,6 +981,7 @@ export default function App() {
   const [unreadChatCount, setUnreadChatCount] = useState(0)
   const [inAppNotice, setInAppNotice] = useState<{ text: string; postId?: number; nick?: string } | null>(null)
   const commentHydrated = useRef(false)
+  const savedNicknameRef = useRef('')
   const messageHydrated = useRef(false)
   const prevUnreadComment = useRef(0)
   const prevUnreadChat = useRef(0)
@@ -1266,6 +1312,8 @@ export default function App() {
 
   const resetLocalProfile = () => {
     setNickname('')
+    setAccountNicks([])
+    savedNicknameRef.current = ''
     setAvatarUrl('')
     setBio('')
     setUserUrls([''])
@@ -1284,7 +1332,11 @@ export default function App() {
   }
 
   const applyUserRow = (data: any) => {
-    if (data.nickname) setNickname(data.nickname)
+    if (data.nickname) {
+      setNickname(data.nickname)
+      savedNicknameRef.current = data.nickname
+      setAccountNicks((prev) => [...new Set([data.nickname, ...prev])])
+    }
     setAvatarUrl(data.avatar_url || '')
     setBio(data.bio || '')
     if (data.user_urls && Array.isArray(data.user_urls) && data.user_urls.length > 0) {
@@ -1325,13 +1377,21 @@ export default function App() {
 
     if (row && belongsToThisUser(row)) {
       applyUserRow(row)
+      await attachAccountToUserRow(authUser, row)
+      await claimOwnedContent(authUser, [row.nickname, metaNick, ...readNickHistory(authUser.id)])
+      const nicks = [...new Set([row.nickname, metaNick, ...readNickHistory(authUser.id)].filter(Boolean))]
+      setAccountNicks(nicks)
+      writeNickHistory(authUser.id, nicks)
       fetchPosts(authUser, row.nickname)
       fetchMessages(row.nickname)
+      fetchQualifications()
       return
     }
 
     if (metaNick) {
       setNickname(metaNick)
+      savedNicknameRef.current = metaNick
+      setAccountNicks((prev) => [...new Set([metaNick, ...prev])])
       setAvatarUrl('')
       setBio('')
       setUserUrls([''])
@@ -1374,34 +1434,35 @@ export default function App() {
 
     const filteredUrls = userUrls.map((u) => u.trim()).filter(Boolean).slice(0, 3)
     const trimmedNick = nickname.trim()
+    const previousNick =
+      savedNicknameRef.current.trim() ||
+      (session.user.user_metadata?.nickname as string | undefined)?.trim() ||
+      ''
 
     try {
-      const baseRow = {
-        nickname: trimmedNick,
-        avatar_url: avatarUrl,
-        bio: bio.trim(),
-        user_urls: filteredUrls,
-        updated_at: new Date().toISOString(),
-      }
-
-      const { error } = await supabase.from('users').upsert([
+      const aliases = [...new Set([previousNick, ...accountNicks].filter(Boolean))]
+      await bindContentToAccount(session.user, aliases, trimmedNick)
+      await savePublicUserRow(
+        session.user,
         {
-          ...baseRow,
-          email: session.user.email,
-          user_id: session.user.id,
+          nickname: trimmedNick,
+          avatar_url: avatarUrl,
+          bio: bio.trim(),
+          user_urls: filteredUrls,
         },
-      ])
-
-      if (error) {
-        const { error: fallbackError } = await supabase.from('users').upsert([baseRow])
-        if (fallbackError) throw fallbackError
-      }
+        previousNick
+      )
+      savedNicknameRef.current = trimmedNick
+      const nextNicks = [...new Set([...aliases, trimmedNick])]
+      setAccountNicks(nextNicks)
+      writeNickHistory(session.user.id, nextNicks)
 
       await supabase.auth.updateUser({ data: { nickname: trimmedNick } })
 
       alert('プロフィール情報を保存しました！')
       fetchPosts(session.user, trimmedNick)
       fetchComments()
+      fetchQualifications()
       fetchMessages(trimmedNick)
     } catch (error: any) {
       alert('保存エラー: ' + error.message)
@@ -1421,6 +1482,10 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    if (activeTab === 'mypage') fetchQualifications()
+  }, [activeTab])
+
   const fetchPosts = async (authUser?: Session['user'] | null, userNick?: string) => {
     const { data: postsData, error: postsError } = await supabase
       .from('posts')
@@ -1432,10 +1497,10 @@ export default function App() {
 
     if (postsError) return
 
-    const usersMap: { [nick: string]: any } = {}
+    const usersMapByNick: { [nick: string]: any } = {}
     if (usersData) {
       usersData.forEach((u) => {
-        usersMap[u.nickname] = u
+        usersMapByNick[u.nickname] = u
       })
     }
 
@@ -1475,7 +1540,12 @@ export default function App() {
     }
 
     const formattedPosts = (postsData || []).map((post) => {
-      const u = usersMap[post.nickname]
+      const u =
+        profileFromUsers(usersData, {
+          email: post.user_email,
+          userId: post.user_id,
+          nickname: post.nickname,
+        }) || usersMapByNick[post.nickname]
       const metaFields = withPostMeta(post)
       return {
         ...post,
@@ -1517,7 +1587,12 @@ export default function App() {
       const grouped: { [postId: number]: Comment[] } = {}
       commentsData.forEach((c) => {
         if (!grouped[c.post_id]) grouped[c.post_id] = []
-        const u = usersMap[c.nickname]
+        const u =
+          profileFromUsers(usersData, {
+            email: c.user_email,
+            userId: c.user_id,
+            nickname: c.nickname,
+          }) || usersMap[c.nickname]
         grouped[c.post_id].push({
           ...c,
           avatar_url: u?.avatar_url || c.avatar_url,
@@ -1880,15 +1955,21 @@ export default function App() {
 
       const filteredUrls = userUrls.map((u) => u.trim()).filter(Boolean).slice(0, 3)
 
-      await supabase.from('users').upsert([
+      await bindContentToAccount(
+        session.user,
+        [...new Set([savedNicknameRef.current, nickname.trim(), ...accountNicks].filter(Boolean))],
+        nickname.trim()
+      )
+      await savePublicUserRow(
+        session.user,
         {
           nickname: nickname.trim(),
           avatar_url: newAvatarUrl,
           bio: bio.trim(),
           user_urls: filteredUrls,
-          updated_at: new Date().toISOString(),
         },
-      ])
+        savedNicknameRef.current || nickname.trim()
+      )
 
       alert('プロフィール画像を更新・保存しました！')
       fetchPosts(session.user, nickname)
@@ -2093,6 +2174,11 @@ export default function App() {
         content: modalCommentInput.trim(),
       }
 
+      if (session?.user) {
+        insertData.user_id = session.user.id
+        insertData.user_email = session.user.email
+      }
+
       if (replyTarget) {
         insertData.parent_id = replyTarget.id
         if (!expandedCommentIds.includes(replyTarget.id)) {
@@ -2100,8 +2186,7 @@ export default function App() {
         }
       }
 
-      const { error } = await supabase.from('comments').insert([insertData])
-      if (error) throw error
+      await insertRow('comments', insertData, 'コメント送信エラー')
 
       setModalCommentInput('')
       setReplyTarget(null)
@@ -2143,16 +2228,18 @@ export default function App() {
         .from('floor-plans')
         .getPublicUrl(fileName)
 
-      const { error: insertError } = await supabase.from('user_qualifications').insert([
+      await insertRow(
+        'user_qualifications',
         {
           nickname: nickname,
           qualification_name: selectedQualification,
           cert_image_url: publicUrlData.publicUrl,
           status: 'pending',
+          user_id: session.user.id,
+          user_email: session.user.email,
         },
-      ])
-
-      if (insertError) throw insertError
+        '申請エラー'
+      )
 
       alert(`「${selectedQualification}」の申請を送信しました！確認までお待ちください。`)
       setCertFile(null)
@@ -2165,10 +2252,14 @@ export default function App() {
     }
   }
 
-  const getApprovedQualsForUser = (userNick?: string) => {
-    if (!userNick) return []
+  const getApprovedQualsForUser = (author?: {
+    nickname?: string
+    user_email?: string
+    user_id?: string
+  }) => {
+    if (!author) return []
     return allUserQuals
-      .filter((q) => q.nickname === userNick && q.status === 'approved')
+      .filter((q) => isOwnedByAccount(q, { id: author.user_id, email: author.user_email }, author.nickname) && isApprovedQualStatus(q.status))
       .map((q) => q.qualification_name)
   }
 
@@ -2176,11 +2267,19 @@ export default function App() {
     if (e) e.stopPropagation()
     if (!user.nickname || user.nickname === 'ゲスト') return
 
-    const { data } = await supabase
-      .from('users')
-      .select('*')
-      .eq('nickname', user.nickname)
-      .single()
+    let row = null as any
+    if (user.user_email) {
+      const byEmail = await supabase.from('users').select('*').eq('email', user.user_email).maybeSingle()
+      row = byEmail.data
+    }
+    if (!row && user.user_id) {
+      const byId = await supabase.from('users').select('*').eq('user_id', user.user_id).maybeSingle()
+      row = byId.data
+    }
+    if (!row && user.nickname) {
+      const byNick = await supabase.from('users').select('*').eq('nickname', user.nickname).maybeSingle()
+      row = byNick.data
+    }
 
     const toUrlList = (urls: unknown, fallback?: string) => {
       if (Array.isArray(urls)) return urls.filter(Boolean)
@@ -2189,12 +2288,14 @@ export default function App() {
       return []
     }
 
-    if (data) {
+    if (row) {
       setViewUserProfile({
-        nickname: data.nickname,
-        avatar_url: data.avatar_url || user.avatar_url,
-        bio: data.bio || user.bio,
-        user_urls: toUrlList(data.user_urls, data.user_url) || toUrlList(user.user_urls),
+        nickname: row.nickname,
+        avatar_url: row.avatar_url || user.avatar_url,
+        bio: row.bio || user.bio,
+        user_urls: toUrlList(row.user_urls, row.user_url) || toUrlList(user.user_urls),
+        user_id: row.user_id || user.user_id,
+        user_email: row.email || user.user_email,
       })
     } else {
       setViewUserProfile({
@@ -2204,24 +2305,21 @@ export default function App() {
     }
   }
 
-  const myApprovedQuals = allUserQuals.filter((q) => q.nickname === nickname && q.status === 'approved')
-  const myPendingQuals = allUserQuals.filter((q) => q.nickname === nickname && q.status === 'pending')
+  const isMine = (row: { user_id?: string | null; user_email?: string | null; nickname?: string | null }) =>
+    isOwnedByAccount(row, session?.user, nickname, accountNicks)
+
+  const myApprovedQuals = allUserQuals.filter((q) => isMine(q) && isApprovedQualStatus(q.status))
+  const myPendingQuals = allUserQuals.filter((q) => isMine(q) && isPendingQualStatus(q.status))
 
   const favoritePosts = posts.filter((post) => likedPostIds.includes(post.id))
-  const myPosts = posts.filter((post) => {
-    if (session?.user && post.user_id && post.user_id === session.user.id) return true
-    return !!nickname && post.nickname === nickname
-  })
+  const myPosts = posts.filter((post) => isMine(post))
 
   useEffect(() => {
     if (!session?.user || !nickname.trim()) {
       setUnreadCommentCount(0)
       return
     }
-    const ownPosts = posts.filter((post) => {
-      if (session.user && post.user_id && post.user_id === session.user.id) return true
-      return post.nickname === nickname
-    })
+    const ownPosts = posts.filter((post) => isMine(post))
     if (!commentHydrated.current) {
       if (Object.keys(commentSeen).length === 0) {
         const next: Record<string, number> = {}
@@ -2321,10 +2419,8 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedPost || !session?.user) return
-    const isMine =
-      (selectedPost.user_id && selectedPost.user_id === session.user.id) ||
-      (!!nickname && selectedPost.nickname === nickname)
-    if (!isMine) return
+    const isMinePost = isMine(selectedPost)
+    if (!isMinePost) return
     const maxId = (comments[selectedPost.id] || []).reduce((max, c) => Math.max(max, c.id), 0)
     setCommentSeen((prev) => {
       if ((prev[String(selectedPost.id)] ?? 0) >= maxId) return prev
@@ -2348,7 +2444,7 @@ export default function App() {
   }, [activeTab, selectedChatNick, chatMessages, nickname])
 
   const renderCommentBox = (c: Comment, isChild = false) => {
-    const quals = getApprovedQualsForUser(c.nickname)
+    const quals = getApprovedQualsForUser(c)
     const isLiked = likedCommentIds.includes(c.id)
     const isDisliked = dislikedCommentIds.includes(c.id)
 
@@ -2377,7 +2473,7 @@ export default function App() {
                   ? undefined
                   : (e) =>
                       openUserProfile(
-                        { nickname: c.nickname, avatar_url: c.avatar_url, user_urls: c.user_urls, bio: c.bio },
+                        { nickname: c.nickname, avatar_url: c.avatar_url, user_urls: c.user_urls, bio: c.bio, user_id: c.user_id, user_email: c.user_email },
                         e
                       )
               }
@@ -2389,7 +2485,7 @@ export default function App() {
                 onClick={(e) => {
                   e.stopPropagation()
                   openUserProfile(
-                    { nickname: c.nickname, avatar_url: c.avatar_url, user_urls: c.user_urls, bio: c.bio },
+                    { nickname: c.nickname, avatar_url: c.avatar_url, user_urls: c.user_urls, bio: c.bio, user_id: c.user_id, user_email: c.user_email },
                     e
                   )
                 }}
@@ -2636,7 +2732,7 @@ export default function App() {
               <h2 className="font-bold text-sm text-slate-500 uppercase tracking-wider">最新の投稿</h2>
               {posts.map((post) => {
                 const isLiked = likedPostIds.includes(post.id)
-                const postUserQuals = getApprovedQualsForUser(post.nickname)
+                const postUserQuals = getApprovedQualsForUser(post)
                 const postComments = comments[post.id] || []
 
                 return (
@@ -2656,7 +2752,7 @@ export default function App() {
                           size="md"
                           onClick={(e) =>
                             openUserProfile(
-                              { nickname: post.nickname || '匿名ユーザー', avatar_url: post.avatar_url, user_urls: post.user_urls, bio: post.bio },
+                              { nickname: post.nickname || '匿名ユーザー', avatar_url: post.avatar_url, user_urls: post.user_urls, bio: post.bio, user_id: post.user_id, user_email: post.user_email },
                               e
                             )
                           }
@@ -2668,7 +2764,7 @@ export default function App() {
                               onClick={(e) => {
                                 e.stopPropagation()
                                 openUserProfile(
-                                  { nickname: post.nickname || '匿名ユーザー', avatar_url: post.avatar_url, user_urls: post.user_urls, bio: post.bio },
+                                  { nickname: post.nickname || '匿名ユーザー', avatar_url: post.avatar_url, user_urls: post.user_urls, bio: post.bio, user_id: post.user_id, user_email: post.user_email },
                                   e
                                 )
                               }}
@@ -2697,7 +2793,7 @@ export default function App() {
                         </div>
                       </div>
 
-                      {post.nickname === nickname && (
+                      {isMine(post) && (
                         <button
                           onClick={(e) => handleDeletePost(post.id, post.image_urls, e)}
                           className="text-slate-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
@@ -3767,6 +3863,8 @@ export default function App() {
                         avatar_url: selectedPost.avatar_url,
                         user_urls: selectedPost.user_urls,
                         bio: selectedPost.bio,
+                        user_id: selectedPost.user_id,
+                        user_email: selectedPost.user_email,
                       },
                       e
                     )
@@ -3782,6 +3880,8 @@ export default function App() {
                           avatar_url: selectedPost.avatar_url,
                           user_urls: selectedPost.user_urls,
                           bio: selectedPost.bio,
+                          user_id: selectedPost.user_id,
+                          user_email: selectedPost.user_email,
                         },
                         e
                       )
@@ -3797,7 +3897,7 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-2">
-                {selectedPost.nickname === nickname && (
+                {isMine(selectedPost) && (
                   <button
                     onClick={(e) => handleDeletePost(selectedPost.id, selectedPost.image_urls, e)}
                     className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
@@ -3941,9 +4041,9 @@ export default function App() {
               />
               <h3 className="font-bold text-lg text-slate-800">{viewUserProfile.nickname}</h3>
 
-              {getApprovedQualsForUser(viewUserProfile.nickname).length > 0 && (
+              {getApprovedQualsForUser(viewUserProfile).length > 0 && (
                 <div className="flex flex-wrap justify-center gap-1">
-                  {getApprovedQualsForUser(viewUserProfile.nickname).map((q, idx) => (
+                  {getApprovedQualsForUser(viewUserProfile).map((q, idx) => (
                     <span
                       key={idx}
                       className="inline-flex items-center gap-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full text-xs font-bold"
