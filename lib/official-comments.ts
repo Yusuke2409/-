@@ -269,16 +269,11 @@ export async function scheduleOfficialComments(postId: number) {
   }
 
   const nickByEmail = await officialNicknamesFromUsers(supabase)
-  const namedEmails = officialEmailList().filter((email) => nickByEmail.get(emailKey(email)))
-  const sourceEmails = namedEmails.length > 0 ? namedEmails : officialEmailList()
-  const pickCount = randInt(10, Math.min(20, Math.max(10, sourceEmails.length)))
-  const picked = shufflePick(sourceEmails, pickCount).map((email) => ({
+  const pickCount = randInt(10, 20)
+  const picked = shufflePick(officialEmailList(), pickCount).map((email) => ({
     email,
-    nickname: nickByEmail.get(emailKey(email)) || '',
-  })).filter((account) => account.nickname)
-  if (picked.length === 0) {
-    return { ok: false, skipped: 'no_named_official_accounts' as const }
-  }
+    nickname: nickByEmail.get(emailKey(email)) || nicknameFromOfficialEmail(email),
+  }))
   const images: string[] = Array.isArray(post.image_urls)
     ? post.image_urls
     : post.image_url
@@ -358,15 +353,10 @@ export async function postDueOfficialComments() {
   let posted = 0
   for (const job of jobs || []) {
     const nickname =
-      nickByEmail.get(emailKey(job.account_email)) || String(job.nickname || '').trim()
-    if (!nickname) {
-      await supabase
-        .from('official_comment_jobs')
-        .update({ status: 'error', error: 'public.users にニックネームがありません' })
-        .eq('id', job.id)
-      continue
-    }
-    if (nickname !== job.nickname) {
+      nickByEmail.get(emailKey(job.account_email)) ||
+      String(job.nickname || '').trim() ||
+      nicknameFromOfficialEmail(String(job.account_email || ''))
+    if (nickname && nickname !== job.nickname) {
       await supabase.from('official_comment_jobs').update({ nickname }).eq('id', job.id)
     }
     const { error: commentError } = await supabase.from('comments').insert([
