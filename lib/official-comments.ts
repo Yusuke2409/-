@@ -29,6 +29,48 @@ export function nicknameFromOfficialEmail(email: string) {
   return n != null ? `【公式】${n}` : '【公式】'
 }
 
+function emailKey(email?: string | null) {
+  return (email || '').trim().toLowerCase()
+}
+
+export async function officialNicknamesFromUsers(supabase: SupabaseClient) {
+  const allowed = new Set(officialEmailList().map(emailKey))
+  const byEmail = new Map<string, string>()
+
+  const { data: rows, error } = await supabase.from('users').select('email, nickname, user_id')
+  if (error) {
+    console.error('official-comments users lookup failed', error.message)
+  }
+
+  for (const row of rows || []) {
+    const nick = String(row.nickname || '').trim()
+    if (!nick) continue
+    const email = emailKey(row.email)
+    if (email && allowed.has(email)) {
+      byEmail.set(email, nick)
+    }
+  }
+
+  for (const email of officialEmailList()) {
+    const key = emailKey(email)
+    if (byEmail.has(key)) continue
+    const legacy = nicknameFromOfficialEmail(email)
+    const hit = (rows || []).find((row) => String(row.nickname || '').trim() === legacy)
+    if (hit?.nickname) byEmail.set(key, String(hit.nickname).trim())
+  }
+
+  return byEmail
+}
+
+export async function latestOfficialNickname(
+  supabase: SupabaseClient,
+  email: string,
+  cache?: Map<string, string>
+) {
+  const map = cache || (await officialNicknamesFromUsers(supabase))
+  return map.get(emailKey(email)) || ''
+}
+
 export function adminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -193,25 +235,13 @@ export async function makeOfficialComments(args: {
 }
 
 export async function loadOfficialAccounts(supabase: SupabaseClient) {
-  const allowed = new Set(officialEmailList().map((e) => e.toLowerCase()))
-  const found: { email: string; nickname: string }[] = []
-  for (let page = 1; page <= 20; page++) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 200 })
-    if (error) throw error
-    const users = data.users || []
-    for (const user of users) {
-      const email = user.email?.toLowerCase()
-      if (!email || !allowed.has(email)) continue
-      found.push({
-        email: user.email as string,
-        nickname:
-          (user.user_metadata?.nickname as string | undefined)?.trim() ||
-          nicknameFromOfficialEmail(user.email as string),
-      })
-    }
-    if (users.length < 200) break
-  }
-  return found
+  const nickByEmail = await officialNicknamesFromUsers(supabase)
+  return officialEmailList()
+    .map((email) => ({
+      email,
+      nickname: nickByEmail.get(emailKey(email)) || '',
+    }))
+    .filter((account) => account.nickname)
 }
 
 export async function scheduleOfficialComments(postId: number) {
@@ -238,12 +268,17 @@ export async function scheduleOfficialComments(postId: number) {
     return { ok: true, skipped: 'already_scheduled' as const }
   }
 
-  const pickCount = randInt(10, 20)
-  const pickedEmails = shufflePick(officialEmailList(), pickCount)
-  const picked = pickedEmails.map((email) => ({
+  const nickByEmail = await officialNicknamesFromUsers(supabase)
+  const namedEmails = officialEmailList().filter((email) => nickByEmail.get(emailKey(email)))
+  const sourceEmails = namedEmails.length > 0 ? namedEmails : officialEmailList()
+  const pickCount = randInt(10, Math.min(20, Math.max(10, sourceEmails.length)))
+  const picked = shufflePick(sourceEmails, pickCount).map((email) => ({
     email,
-    nickname: nicknameFromOfficialEmail(email),
-  }))
+    nickname: nickByEmail.get(emailKey(email)) || '',
+  })).filter((account) => account.nickname)
+  if (picked.length === 0) {
+    return { ok: false, skipped: 'no_named_official_accounts' as const }
+  }
   const images: string[] = Array.isArray(post.image_urls)
     ? post.image_urls
     : post.image_url
@@ -319,12 +354,25 @@ export async function postDueOfficialComments() {
     .eq('status', 'pending')
     .gt('run_at', new Date().toISOString())
 
+  const nickByEmail = await officialNicknamesFromUsers(supabase)
   let posted = 0
   for (const job of jobs || []) {
+    const nickname =
+      nickByEmail.get(emailKey(job.account_email)) || String(job.nickname || '').trim()
+    if (!nickname) {
+      await supabase
+        .from('official_comment_jobs')
+        .update({ status: 'error', error: 'public.users にニックネームがありません' })
+        .eq('id', job.id)
+      continue
+    }
+    if (nickname !== job.nickname) {
+      await supabase.from('official_comment_jobs').update({ nickname }).eq('id', job.id)
+    }
     const { error: commentError } = await supabase.from('comments').insert([
       {
         post_id: job.post_id,
-        nickname: job.nickname,
+        nickname,
         content: job.content,
         avatar_url: '',
         bio: '',
