@@ -959,7 +959,7 @@ export default function App() {
     }
 
     setViewUserProfile(null)
-    setSelectedPost(null)
+    closeSelectedPost()
 
     if (!session?.user) {
       requireLogin()
@@ -1403,7 +1403,7 @@ export default function App() {
 
       alert('投稿と関連画像を削除しました！')
       if (selectedPost?.id === postId) {
-        setSelectedPost(null)
+        closeSelectedPost()
       }
       fetchPosts(session?.user ?? null, nickname)
     } catch (error: any) {
@@ -1466,9 +1466,6 @@ export default function App() {
 
       if (replyTarget) {
         insertData.parent_id = replyTarget.id
-        if (!expandedCommentIds.includes(replyTarget.id)) {
-          setExpandedCommentIds((prev) => [...prev, replyTarget.id])
-        }
       }
 
       await insertRow('comments', insertData, 'コメント送信エラー')
@@ -1479,6 +1476,22 @@ export default function App() {
     } catch (error: any) {
       alert('コメント送信エラー: ' + error.message)
     }
+  }
+
+  const resetPostCommentUi = () => {
+    setReplyTarget(null)
+    setExpandedCommentIds([])
+    setModalCommentInput('')
+  }
+
+  const closeSelectedPost = () => {
+    setSelectedPost(null)
+    resetPostCommentUi()
+  }
+
+  const openSelectedPost = (post: Post) => {
+    setSelectedPost(post)
+    resetPostCommentUi()
   }
 
   const toggleReplyExpand = (commentId: number) => {
@@ -1856,8 +1869,7 @@ export default function App() {
             if (inAppNotice.postId) {
               const post = posts.find((p) => p.id === inAppNotice.postId)
               if (post) {
-                setSelectedPost(post)
-                setReplyTarget(null)
+                openSelectedPost(post)
               }
             } else if (inAppNotice.nick) {
               if (!session?.user) {
@@ -2018,10 +2030,7 @@ export default function App() {
                 return (
                   <div
                     key={post.id}
-                    onClick={() => {
-                      setSelectedPost(post)
-                      setReplyTarget(null)
-                    }}
+                    onClick={() => openSelectedPost(post)}
                     className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm space-y-2 cursor-pointer hover:border-slate-300 transition-colors"
                   >
                     <div className="p-3 border-b border-slate-100 flex items-start justify-between">
@@ -2264,10 +2273,7 @@ export default function App() {
                 return (
                   <div
                     key={post.id}
-                    onClick={() => {
-                      setSelectedPost(post)
-                      setReplyTarget(null)
-                    }}
+                    onClick={() => openSelectedPost(post)}
                     className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm cursor-pointer hover:border-slate-300"
                   >
                     <div className="relative">
@@ -2342,10 +2348,7 @@ export default function App() {
               favoritePosts.map((post) => (
                 <div
                   key={post.id}
-                  onClick={() => {
-                    setSelectedPost(post)
-                    setReplyTarget(null)
-                  }}
+                  onClick={() => openSelectedPost(post)}
                   className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm cursor-pointer hover:border-slate-300"
                 >
                   <ImageCarousel
@@ -2958,10 +2961,7 @@ export default function App() {
                   {myPosts.map((p) => (
                     <div
                       key={p.id}
-                      onClick={() => {
-                        setSelectedPost(p)
-                        setReplyTarget(null)
-                      }}
+                      onClick={() => openSelectedPost(p)}
                       className="border border-slate-200 rounded-lg overflow-hidden cursor-pointer hover:border-slate-300 relative group bg-slate-50"
                     >
                       <img
@@ -3183,7 +3183,7 @@ export default function App() {
                   </button>
                 )}
                 <button
-                  onClick={() => setSelectedPost(null)}
+                  onClick={closeSelectedPost}
                   className="p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 cursor-pointer"
                 >
                   <X className="w-5 h-5" />
@@ -3379,7 +3379,7 @@ export default function App() {
                     <div
                       key={p.id}
                       onClick={() => {
-                        setSelectedPost(p)
+                        openSelectedPost(p)
                         setViewUserProfile(null)
                       }}
                       className="aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-100 cursor-pointer hover:opacity-80"
