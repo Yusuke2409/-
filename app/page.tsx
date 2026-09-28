@@ -36,6 +36,7 @@ import {
   User,
   Image as ImageIcon,
   Filter,
+  RotateCcw,
   ShieldCheck,
   Clock,
   Upload,
@@ -1113,6 +1114,17 @@ export default function App() {
     setFilteredPosts(order.map((id) => byId.get(id)!).filter(Boolean))
   }
 
+  const resetSearchFilters = () => {
+    setSearchDocType('すべて')
+    setSearchLayout('すべて')
+    setSearchFloors('すべて')
+    setSearchFloorAreaMin('')
+    setSearchFloorAreaMax('')
+    setSearchMakers([])
+    setDraftSearchMakers([])
+    setShowSearchMakers(false)
+  }
+
   const handleToggleLike = async (postId: number, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
 
@@ -2137,10 +2149,20 @@ export default function App() {
         {activeTab === 'search' && (
           <div className="space-y-4">
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
-              <h2 className="font-bold text-base text-slate-700 flex items-center gap-2">
-                <Filter className="w-5 h-5 text-indigo-600" />
-                絞り込み検索
-              </h2>
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="font-bold text-base text-slate-700 flex items-center gap-2">
+                  <Filter className="w-5 h-5 text-indigo-600" />
+                  絞り込み検索
+                </h2>
+                <button
+                  type="button"
+                  onClick={resetSearchFilters}
+                  className="shrink-0 inline-flex items-center gap-1 text-[11px] font-bold text-slate-500 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 border border-slate-200 px-2 py-1 rounded-lg cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  リセット
+                </button>
+              </div>
 
               <div className="grid grid-cols-3 gap-2">
                 <div>
