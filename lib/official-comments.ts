@@ -127,31 +127,49 @@ function stripPostMeta(comment: string) {
 const FALLBACK_COMMENTS = [
   '収納多くて使いやすそう',
   '動線きれいですね',
-  '洗面の位置もう少し右が良さげ',
   'LDK広くていい感じ',
-  '玄関まわり便利そう',
-  '水回り近いの助かる',
-  '窓の位置いいカモ',
-  '廊下ちょっと長めかな',
-  'キッチン対面で良さそう',
   '家事動線よさげ',
-  'トイレ位置ちょっと気になる',
-  'WICあるの羨ましい',
-  '動線スムーズで良い',
-  '階段位置もう一声かも',
-  '南向きっぽくて明るい',
-  '玄関収納もう少し欲しい',
-  'お風呂広めで良さそう',
-  '子ども部屋ちょうどいい',
-  'パントリーあるの良いね',
-  'リビング動線ちょっと気になる',
+  '窓の位置いいカモ',
+  '洗面の位置もう少し右が良さげ\n全体のバランスは好き',
+  'キッチン対面で良さそう\nパントリーあるのも助かる',
+  'WICあるの羨ましい\n廊下ちょっと長めかな',
+  '南向きっぽくて明るい\n玄関収納もう少し欲しいかも',
+  '水回り近いの助かる\nトイレ位置はちょっと気になる',
+  '全体のバランスは良さげ\nLDK広めで明るい感じ\n廊下ちょっと長いかも',
+  '動線スムーズで良いね\n洗面もう少し右でもよさそう\n収納量は充分な感じ',
+  '玄関まわり便利そう\n階段位置もう一声かも\n子ども部屋はちょうどいい',
+  'お風呂広めで良さそう\n家事動線もきれい\nリビングの向きが気になる',
+  '間取りわかりやすい\nキッチン使いやすそう\n窓の取り方いいカモ',
 ]
 
+function commentLengthMix(count: number) {
+  const threeLine = Math.round(count * 0.5)
+  const remaining = Math.max(0, count - threeLine)
+  const oneLine = Math.round(remaining * 0.5)
+  const twoLine = remaining - oneLine
+  return { oneLine, twoLine, threeLine }
+}
+
 function cleanComment(text: string) {
-  const value = (text || '').replace(/\s+/g, '').replace(/!+/g, '！').trim()
-  if (value.length < 8) return ''
-  if (value.length > 22) return value.slice(0, 20)
-  return value
+  const lines = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t\u3000]+/g, '').replace(/!+/g, '！').trim())
+    .filter(Boolean)
+    .slice(0, 3)
+  if (lines.length === 0) return ''
+  const compact = lines.join('')
+  if (compact.length < 8) return ''
+  if (compact.length <= 90) return lines.join('\n')
+  const kept: string[] = []
+  let used = 0
+  for (const line of lines) {
+    if (used >= 90) break
+    const next = line.slice(0, Math.max(0, 90 - used))
+    if (next) kept.push(next)
+    used += next.length
+  }
+  return kept.join('\n')
 }
 
 function limitExclamationMarks(comments: string[]) {
@@ -174,18 +192,23 @@ async function generateWithOpenAI(args: {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) return [] as string[]
 
+  const mix = commentLengthMix(args.count)
   const content: Array<Record<string, unknown>> = [
     {
       type: 'text',
-      text: `間取り投稿への短い感想を${args.count}個作って。
+      text: `間取り投稿への感想を${args.count}個作って。
 投稿者の説明・コメント（必ず内容を踏まえる）:
 ${args.comment || '（説明なし）'}
+長さの内訳（必ずこの件数）:
+- ${mix.threeLine}個: 改行で3行。各行は短い一言。例: "動線きれい\\n洗面もう少し右でも\\n収納は充分そう"
+- ${mix.twoLine}個: 改行で2行。例: "LDK広くていい感じ\\n廊下ちょっと長めかな"
+- ${mix.oneLine}個: 改行なし1行の簡単な一言（8〜18字）
 条件:
 - 日本語、ラフな口調（友達に話す感じ）
-- 1つあたり10〜20文字
+- 1行はだいたい8〜20字。3行でも長くしすぎない
 - 画像と投稿者の説明の両方を見て書く。説明に書いてある悩みや希望には、いくつか返事する
 - 良い点か「ここはこうしたらもっと良さそう」の軽い指摘
-- 同じ内容を繰り返さない
+- 同じ内容を繰り返さない。配列の順番は1行・2行・3行を混ぜる
 - 専門家っぽい堅い言い方は禁止
 - 「！」はほぼ使わない（${args.count}個のうち多くて1個。残りは「。」なし、または「かな」「かも」「ね」）
 - 「！！」「！？」は禁止
@@ -205,11 +228,11 @@ JSONだけ返す: {"comments":["...", "..."]}`,
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    signal: AbortSignal.timeout(12000),
+    signal: AbortSignal.timeout(20000),
     body: JSON.stringify({
       model: 'gpt-4o-mini',
       temperature: 0.9,
-      max_tokens: 400,
+      max_tokens: 1600,
       response_format: { type: 'json_object' },
       messages: [{ role: 'user', content }],
     }),

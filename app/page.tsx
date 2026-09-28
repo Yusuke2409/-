@@ -10,6 +10,24 @@ import {
   profileFromUsers,
   savePublicUserRow,
 } from '@/lib/user-identity'
+import { authErrorJa } from '@/lib/auth-errors'
+import {
+  CHAT_IMAGE_MARKER,
+  CONTACT_EMAIL,
+  FLOOR_AREA_BANDS,
+  MAKER_OPTIONS,
+  QUALIFICATION_OPTIONS,
+} from '@/lib/constants'
+import { encodePostMetaComment, withPostMeta } from '@/lib/post-meta'
+import type { ChatMessage, Comment, Post, UserProfileView, UserQualification } from '@/lib/types'
+import { AvatarIcon } from '@/components/AvatarIcon'
+import { ExpandableText } from '@/components/ExpandableText'
+import { FloorAreaRangeSelects } from '@/components/FloorAreaRangeSelects'
+import { ImageCarousel } from '@/components/ImageCarousel'
+import { ImageLightbox } from '@/components/ImageLightbox'
+import { ImagePreviewReorder, moveItem } from '@/components/ImagePreviewReorder'
+import { NavBadge } from '@/components/NavBadge'
+import { PostMetaTags } from '@/components/PostMetaTags'
 import type { Session } from '@supabase/supabase-js'
 import {
   Home,
@@ -31,8 +49,6 @@ import {
   ChevronUp,
   ThumbsUp,
   ThumbsDown,
-  ChevronLeft,
-  ChevronRight,
   ExternalLink,
   Camera,
   Link as LinkIcon,
@@ -47,291 +63,12 @@ import {
   MessageSquare,
 } from 'lucide-react'
 
-type Post = {
-  id: number
-  created_at: string
-  image_urls: string[]
-  doc_type: string
-  layout?: string
-  floors?: string
-  maker?: string
-  comment: string
-  nickname?: string
-  avatar_url?: string
-  user_urls?: string[]
-  bio?: string
-  likes_count?: number
-  user_id?: string
-  user_email?: string
-  floor_area_min?: number | null
-  floor_area_max?: number | null
-}
-
-type Comment = {
-  id: number
-  created_at: string
-  post_id: number
-  nickname: string
-  avatar_url?: string
-  user_urls?: string[]
-  bio?: string
-  content: string
-  parent_id?: number | null
-  likes_count?: number
-  dislikes_count?: number
-  user_id?: string
-  user_email?: string
-}
-
-type UserQualification = {
-  id: number
-  created_at: string
-  nickname: string
-  qualification_name: string
-  cert_image_url?: string
-  status: 'pending' | 'approved' | 'rejected'
-  user_id?: string
-  user_email?: string
-}
-
-type UserProfileView = {
-  nickname: string
-  avatar_url?: string
-  user_urls?: string[]
-  bio?: string
-  user_id?: string
-  user_email?: string
-}
-
-type ChatMessage = {
-  id: number
-  created_at: string
-  sender_nickname: string
-  recipient_nickname: string
-  sender_id?: string
-  content: string
-  image_url?: string
-}
-
-const CHAT_IMAGE_MARKER = 'IMAGE:'
-
-const CONTACT_EMAIL = 'madocomi.official@gmail.com'
-
-const FLOOR_AREA_STEPS = [60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200]
-const FLOOR_AREA_BAND_TENS = [60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190]
-
-const FLOOR_AREA_BANDS: { value: string; label: string; min: number | null; max: number | null }[] = [
-  { value: 'under60', label: '60㎡以下', min: 0, max: 60 },
-  ...FLOOR_AREA_BAND_TENS.map((n) => ({
-    value: String(n),
-    label: `${n}㎡台`,
-    min: n,
-    max: n + 10,
-  })),
-  { value: '200plus', label: '200㎡以上', min: 200, max: null },
-]
-
-function formatFloorAreaBand(min?: number | string | null, max?: number | string | null) {
-  const minN = min == null || min === '' ? null : Number(min)
-  const maxN = max == null || max === '' ? null : Number(max)
-  const hasMin = minN != null && Number.isFinite(minN)
-  const hasMax = maxN != null && Number.isFinite(maxN)
-  if (!hasMin && !hasMax) return null
-  if ((minN == null || minN === 0) && maxN === 60) return '60㎡以下'
-  if (minN === 200 && (maxN == null || maxN === 0)) return '200㎡以上'
-  if (minN != null && maxN === minN + 10 && minN >= 60 && minN <= 190) return `${minN}㎡台`
-  if (!hasMin && !hasMax) return null
-  const left = hasMin && minN > 0 ? `${minN}㎡以上` : '下限なし'
-  const right = hasMax && maxN > 0 ? `${maxN}㎡未満` : '上限なし'
-  return `${left}〜${right}`
-}
-
-function PostMetaTags({ post, className = '' }: { post: Post; className?: string }) {
-  const areaLabel = formatFloorAreaBand(post.floor_area_min, post.floor_area_max)
-  return (
-    <div className={`flex gap-1.5 flex-wrap ${className}`}>
-      {post.doc_type && (
-        <span className="text-xs font-semibold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">
-          {post.doc_type}
-        </span>
-      )}
-      {post.layout && (
-        <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-          {post.layout}
-        </span>
-      )}
-      {post.floors && (
-        <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-          {post.floors}
-        </span>
-      )}
-      {areaLabel && (
-        <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{areaLabel}</span>
-      )}
-      {post.maker && (
-        <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{post.maker}</span>
-      )}
-    </div>
-  )
-}
-
-function FloorAreaRangeSelects({
-  minValue,
-  maxValue,
-  onMinChange,
-  onMaxChange,
-}: {
-  minValue: string
-  maxValue: string
-  onMinChange: (value: string) => void
-  onMaxChange: (value: string) => void
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <select
-        value={minValue}
-        onChange={(e) => onMinChange(e.target.value)}
-        className="flex-1 min-w-0 p-2 text-xs border border-slate-200 rounded-lg bg-white"
-      >
-        <option value="">下限なし</option>
-        {FLOOR_AREA_STEPS.map((n) => (
-          <option key={`min-${n}`} value={String(n)}>
-            {n}㎡以上
-          </option>
-        ))}
-      </select>
-      <span className="text-slate-400 text-xs shrink-0">〜</span>
-      <select
-        value={maxValue}
-        onChange={(e) => onMaxChange(e.target.value)}
-        className="flex-1 min-w-0 p-2 text-xs border border-slate-200 rounded-lg bg-white"
-      >
-        {FLOOR_AREA_STEPS.map((n) => (
-          <option key={`max-${n}`} value={String(n)}>
-            {n}㎡未満
-          </option>
-        ))}
-        <option value="">上限なし</option>
-      </select>
-    </div>
-  )
-}
-
-const MAKER_OPTIONS = [
-  'ダイワハウス',
-  '積水ハウス',
-  '住友林業',
-  '一条工務店',
-  'アイ工務店',
-  '三井ホーム',
-  'ヤマト住建',
-  'ヘーベルハウス',
-  'ミサワホーム',
-  'スウェーデンハウス',
-  'セキスイハイム',
-  'トヨタホーム',
-  'パナソニック ホームズ',
-  '桧家住宅',
-  'クレバリーホーム',
-  'ヤマダホームズ',
-  'タマホーム',
-  'アイフルホーム',
-  'アキュラホーム',
-  'ウィザースホーム',
-  '日本ハウスホールディングス',
-  '住友不動産',
-  'セルコホーム',
-  'アエラホーム',
-  'その他',
-]
-
-function authErrorJa(raw: string) {
-  const text = raw || '不明なエラーです'
-  const lower = text.toLowerCase()
-  if (lower.includes('invalid login credentials')) return 'メールアドレスまたはパスワードが正しくありません。'
-  if (lower.includes('email not confirmed')) return 'メールアドレスの確認が完了していません。届いたメールのリンクを開いてください。'
-  if (lower.includes('user not found')) return 'このメールアドレスのアカウントは見つかりませんでした。'
-  if (lower.includes('over_email_send_rate_limit') || lower.includes('rate limit')) {
-    return 'メールの送信上限に達しました。しばらく待ってから再度お試しください。'
-  }
-  if (lower.includes('expired') || lower.includes('otp_expired') || lower.includes('access denied')) {
-    return 'リンクの有効期限が切れているか、無効です。もう一度パスワード再設定メールを送信してください。'
-  }
-  if (lower.includes('same_password') || lower.includes('same password') || lower.includes('should be different')) {
-    return '現在と同じパスワードは使えません。別のパスワードを設定してください。'
-  }
-  if (lower.includes('password should be at least') || lower.includes('weak')) {
-    return 'パスワードは6文字以上で、推測されにくいものにしてください。'
-  }
-  if (lower.includes('unable to validate email') || lower.includes('invalid email')) {
-    return 'メールアドレスの形式が正しくありません。'
-  }
-  if (lower.includes('error sending') && lower.includes('email')) {
-    return 'メールを送信できませんでした。しばらく待ってから再度お試しください。'
-  }
-  return text
-}
-
-const QUALIFICATION_OPTIONS = [
-  '一級建築士',
-  '二級建築士',
-  '木造建築士',
-  'インテリアコーディネーター',
-  '宅地建物取引士',
-  '第一種電気工事士',
-  '第二種電気工事士',
-  '照明コンサルタント',
-  'インテリアプランナー',
-  '福祉住環境コーディネーター',
-]
 
 function missingColumnFromError(message: string) {
   const match =
     message.match(/Could not find the '([^']+)' column/i) ||
     message.match(/column "([^"]+)" of relation/i)
   return match?.[1] ?? null
-}
-
-type PostAreaMeta = { maker?: string; min?: number | null; max?: number | null }
-
-function stripPostMetaComment(comment: string) {
-  return (comment || '').replace(/\n?\[\[mc:[\s\S]*\]\]\s*$/, '').trim()
-}
-
-function encodePostMetaComment(comment: string, meta: PostAreaMeta) {
-  return `${stripPostMetaComment(comment)}\n[[mc:${JSON.stringify(meta)}]]`
-}
-
-function parsePostMetaComment(comment: string): PostAreaMeta {
-  const match = (comment || '').match(/\[\[mc:([\s\S]*)\]\]\s*$/)
-  if (!match) return {}
-  try {
-    const data = JSON.parse(match[1])
-    return {
-      maker: typeof data.maker === 'string' ? data.maker : undefined,
-      min: data.min ?? null,
-      max: data.max ?? null,
-    }
-  } catch {
-    return {}
-  }
-}
-
-function withPostMeta(post: {
-  comment?: string
-  maker?: string | null
-  floor_area_min?: number | string | null
-  floor_area_max?: number | string | null
-}) {
-  const meta = parsePostMetaComment(post.comment || '')
-  const minFromCol = post.floor_area_min != null && post.floor_area_min !== '' ? Number(post.floor_area_min) : null
-  const maxFromCol = post.floor_area_max != null && post.floor_area_max !== '' ? Number(post.floor_area_max) : null
-  return {
-    comment: stripPostMetaComment(post.comment || ''),
-    maker: post.maker || meta.maker || '',
-    floor_area_min: minFromCol != null && Number.isFinite(minFromCol) ? minFromCol : meta.min ?? null,
-    floor_area_max: maxFromCol != null && Number.isFinite(maxFromCol) ? maxFromCol : meta.max ?? null,
-  }
 }
 
 function isMyLike(like: any, user: { id?: string; email?: string | null }, nick?: string) {
@@ -433,463 +170,6 @@ async function insertRow(table: string, payload: Record<string, unknown>, failMe
 
 async function insertPostRow(payload: Record<string, unknown>) {
   return insertRow('posts', payload, '投稿に失敗しました')
-}
-
-function ImageCarousel({
-  images,
-  onOpenLightbox,
-}: {
-  images: string[]
-  onOpenLightbox?: (index: number) => void
-}) {
-  const [currentIndex, setCurrentIndex] = useState(0)
-
-  if (!images || images.length === 0) return null
-
-  const nextImage = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    setCurrentIndex((prev) => (prev + 1) % images.length)
-  }
-
-  const prevImage = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    setCurrentIndex((prev) => (prev - 1 + images.length) % images.length)
-  }
-
-  return (
-    <div
-      className="relative w-full bg-slate-100 overflow-hidden group"
-      onClick={(e) => {
-        e.stopPropagation()
-        onOpenLightbox?.(currentIndex)
-      }}
-    >
-      <img
-        src={images[currentIndex]}
-        alt={`図面 ${currentIndex + 1}`}
-        className="w-full h-auto max-h-96 object-contain mx-auto transition-all duration-300 cursor-zoom-in"
-      />
-
-      {images.length > 1 && (
-        <>
-          <button
-            type="button"
-            onClick={prevImage}
-            className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-full transition-opacity opacity-80 hover:opacity-100"
-          >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <button
-            type="button"
-            onClick={nextImage}
-            className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-full transition-opacity opacity-80 hover:opacity-100"
-          >
-            <ChevronRight className="w-5 h-5" />
-          </button>
-
-          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1.5 bg-black/30 px-2 py-1 rounded-full">
-            {images.map((_, idx) => (
-              <span
-                key={idx}
-                className={`w-2 h-2 rounded-full transition-all ${
-                  idx === currentIndex ? 'bg-white scale-110' : 'bg-white/50'
-                }`}
-              />
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
-
-function ImageLightbox({
-  images,
-  startIndex,
-  onClose,
-}: {
-  images: string[]
-  startIndex: number
-  onClose: () => void
-}) {
-  const MIN_SCALE = 1
-  const MAX_SCALE = 6
-  const [index, setIndex] = useState(startIndex)
-  const [transform, setTransform] = useState({ scale: 1, x: 0, y: 0 })
-  const stageRef = useRef<HTMLDivElement>(null)
-  const scaleRef = useRef(1)
-  const posRef = useRef({ x: 0, y: 0 })
-  const pointersRef = useRef(new Map<number, { x: number; y: number }>())
-  const pinchRef = useRef<{ dist: number } | null>(null)
-  const dragRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null)
-  const swipeRef = useRef<{ x: number; y: number } | null>(null)
-  const lastTapRef = useRef(0)
-  const movedRef = useRef(false)
-
-  const applyTransform = (scale: number, x: number, y: number) => {
-    const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale))
-    const nextX = nextScale === MIN_SCALE ? 0 : x
-    const nextY = nextScale === MIN_SCALE ? 0 : y
-    scaleRef.current = nextScale
-    posRef.current = { x: nextX, y: nextY }
-    setTransform({ scale: nextScale, x: nextX, y: nextY })
-  }
-
-  const resetZoom = () => applyTransform(1, 0, 0)
-
-  const zoomAt = (clientX: number, clientY: number, factor: number) => {
-    const stage = stageRef.current
-    if (!stage) return
-    const rect = stage.getBoundingClientRect()
-    const scale = scaleRef.current
-    const { x, y } = posRef.current
-    const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * factor))
-    const cx = clientX - rect.left - rect.width / 2
-    const cy = clientY - rect.top - rect.height / 2
-    const wx = (cx - x) / scale
-    const wy = (cy - y) / scale
-    applyTransform(newScale, cx - wx * newScale, cy - wy * newScale)
-  }
-
-  useEffect(() => {
-    setIndex(Math.min(Math.max(startIndex, 0), images.length - 1))
-    resetZoom()
-  }, [startIndex, images])
-
-  useEffect(() => {
-    resetZoom()
-  }, [index])
-
-  useEffect(() => {
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-      if (scaleRef.current > 1.02) return
-      if (e.key === 'ArrowRight' && images.length > 1) setIndex((i) => (i + 1) % images.length)
-      if (e.key === 'ArrowLeft' && images.length > 1) setIndex((i) => (i - 1 + images.length) % images.length)
-    }
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault()
-      zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.12 : 0.9)
-    }
-    const stage = stageRef.current
-    window.addEventListener('keydown', onKey)
-    stage?.addEventListener('wheel', onWheel, { passive: false })
-    return () => {
-      document.body.style.overflow = prev
-      window.removeEventListener('keydown', onKey)
-      stage?.removeEventListener('wheel', onWheel)
-    }
-  }, [images.length, onClose])
-
-  const go = (dir: number) => {
-    if (images.length < 2) return
-    setIndex((i) => (i + dir + images.length) % images.length)
-  }
-
-  const pointerDistance = () => {
-    const pts = [...pointersRef.current.values()]
-    if (pts.length < 2) return 0
-    return Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
-  }
-
-  const pointerMid = () => {
-    const pts = [...pointersRef.current.values()]
-    if (pts.length < 2) return { x: 0, y: 0 }
-    return { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
-  }
-
-  const onPointerDown = (e: React.PointerEvent) => {
-    if ((e.target as HTMLElement).closest('button')) return
-    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
-    movedRef.current = false
-    if (pointersRef.current.size === 2) {
-      pinchRef.current = { dist: pointerDistance() }
-      dragRef.current = null
-      swipeRef.current = null
-      return
-    }
-    if (scaleRef.current > 1.02) {
-      dragRef.current = { x: posRef.current.x, y: posRef.current.y, px: e.clientX, py: e.clientY }
-      swipeRef.current = null
-    } else {
-      swipeRef.current = { x: e.clientX, y: e.clientY }
-      dragRef.current = null
-    }
-  }
-
-  const onPointerMove = (e: React.PointerEvent) => {
-    if (!pointersRef.current.has(e.pointerId)) return
-    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
-    if (pointersRef.current.size >= 2 && pinchRef.current) {
-      const dist = pointerDistance()
-      if (dist > 0 && pinchRef.current.dist > 0) {
-        movedRef.current = true
-        const mid = pointerMid()
-        zoomAt(mid.x, mid.y, dist / pinchRef.current.dist)
-        pinchRef.current = { dist }
-      }
-      return
-    }
-    if (dragRef.current && scaleRef.current > 1.02) {
-      const dx = e.clientX - dragRef.current.px
-      const dy = e.clientY - dragRef.current.py
-      if (Math.hypot(dx, dy) > 4) movedRef.current = true
-      applyTransform(scaleRef.current, dragRef.current.x + dx, dragRef.current.y + dy)
-      return
-    }
-    if (swipeRef.current && Math.abs(e.clientX - swipeRef.current.x) > 8) movedRef.current = true
-  }
-
-  const onPointerUp = (e: React.PointerEvent) => {
-    const target = e.target as HTMLElement
-    if (target.closest('button')) {
-      pointersRef.current.delete(e.pointerId)
-      pinchRef.current = null
-      dragRef.current = null
-      swipeRef.current = null
-      return
-    }
-
-    const wasPinch = pointersRef.current.size >= 2
-    pointersRef.current.delete(e.pointerId)
-    if (pointersRef.current.size < 2) pinchRef.current = null
-    if (pointersRef.current.size === 1 && scaleRef.current > 1.02) {
-      const remaining = [...pointersRef.current.values()][0]
-      dragRef.current = { x: posRef.current.x, y: posRef.current.y, px: remaining.x, py: remaining.y }
-    } else if (pointersRef.current.size === 0) {
-      dragRef.current = null
-    }
-
-    if (wasPinch) {
-      if (scaleRef.current < 1.08) resetZoom()
-      swipeRef.current = null
-      return
-    }
-
-    if (swipeRef.current && scaleRef.current <= 1.02 && pointersRef.current.size === 0) {
-      const dx = e.clientX - swipeRef.current.x
-      const dy = e.clientY - swipeRef.current.y
-      swipeRef.current = null
-      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
-        go(dx < 0 ? 1 : -1)
-        return
-      }
-    } else {
-      swipeRef.current = null
-    }
-
-    if (pointersRef.current.size > 0 || movedRef.current) return
-
-    const onImage = !!target.closest('[data-lightbox-image]')
-    const now = Date.now()
-    if (onImage) {
-      if (now - lastTapRef.current < 280) {
-        if (scaleRef.current > 1.2) resetZoom()
-        else zoomAt(e.clientX, e.clientY, 2.4)
-        lastTapRef.current = 0
-      } else {
-        lastTapRef.current = now
-      }
-      return
-    }
-    onClose()
-  }
-
-  return (
-    <div
-      ref={stageRef}
-      className="fixed inset-0 z-[80] bg-black/92 flex items-center justify-center overflow-hidden touch-none"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-    >
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-        onPointerDown={(e) => e.stopPropagation()}
-        onPointerUp={(e) => e.stopPropagation()}
-        className="absolute top-3 right-3 z-10 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full cursor-pointer"
-        aria-label="閉じる"
-      >
-        <X className="w-6 h-6" />
-      </button>
-
-      {images.length > 1 && (
-        <>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              go(-1)
-            }}
-            onPointerDown={(e) => e.stopPropagation()}
-            onPointerUp={(e) => e.stopPropagation()}
-            className="absolute left-2 md:left-4 z-10 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full cursor-pointer"
-            aria-label="前の画像"
-          >
-            <ChevronLeft className="w-7 h-7" />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              go(1)
-            }}
-            onPointerDown={(e) => e.stopPropagation()}
-            onPointerUp={(e) => e.stopPropagation()}
-            className="absolute right-2 md:right-4 z-10 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full cursor-pointer"
-            aria-label="次の画像"
-          >
-            <ChevronRight className="w-7 h-7" />
-          </button>
-        </>
-      )}
-
-      <img
-        data-lightbox-image="true"
-        src={images[index]}
-        alt={`拡大画像 ${index + 1}`}
-        className="max-w-[100vw] max-h-[100dvh] object-contain select-none"
-        draggable={false}
-        style={{
-          transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`,
-          transformOrigin: 'center center',
-          cursor: transform.scale > 1.02 ? 'grab' : 'zoom-in',
-        }}
-      />
-
-      {images.length > 1 && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1.5 bg-black/40 px-2 py-1.5 rounded-full pointer-events-none">
-          {images.map((_, idx) => (
-            <span
-              key={idx}
-              className={`w-2 h-2 rounded-full ${idx === index ? 'bg-white' : 'bg-white/40'}`}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function ExpandableText({
-  text,
-  className = '',
-  maxLines = 7,
-}: {
-  text: string
-  className?: string
-  maxLines?: number
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const [overflows, setOverflows] = useState(false)
-  const textRef = useRef<HTMLParagraphElement>(null)
-
-  useEffect(() => {
-    setExpanded(false)
-    setOverflows(false)
-  }, [text])
-
-  useEffect(() => {
-    const el = textRef.current
-    if (!el || expanded) return
-    const check = () => {
-      setOverflows(el.scrollHeight > el.clientHeight + 1)
-    }
-    check()
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(check) : null
-    ro?.observe(el)
-    return () => ro?.disconnect()
-  }, [text, expanded])
-
-  if (!text) return null
-
-  return (
-    <div>
-      <p
-        ref={textRef}
-        className={`whitespace-pre-wrap break-words ${expanded ? '' : 'line-clamp-7'} ${className}`}
-        style={
-          expanded
-            ? undefined
-            : {
-                display: '-webkit-box',
-                WebkitLineClamp: maxLines,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-              }
-        }
-      >
-        {text}
-      </p>
-      {overflows && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-            setExpanded((open) => !open)
-          }}
-          className="mt-1 text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer"
-        >
-          {expanded ? '閉じる' : 'さらに表示'}
-        </button>
-      )}
-    </div>
-  )
-}
-
-function NavBadge({ count }: { count: number }) {
-  if (count <= 0) return null
-  return (
-    <span className="absolute -top-1.5 -right-3 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-bold leading-none flex items-center justify-center">
-      {count > 9 ? '9+' : count}
-    </span>
-  )
-}
-
-function AvatarIcon({
-  url,
-  nickname,
-  size = 'md',
-  onClick,
-}: {
-  url?: string
-  nickname?: string
-  size?: 'sm' | 'md' | 'lg'
-  onClick?: (e: React.MouseEvent) => void
-}) {
-  const sizeClasses = {
-    sm: 'w-7 h-7 text-xs',
-    md: 'w-9 h-9 text-sm',
-    lg: 'w-16 h-16 text-2xl',
-  }
-
-  return (
-    <div
-      onClick={(e) => {
-        if (onClick) {
-          e.stopPropagation()
-          onClick(e)
-        }
-      }}
-      className={`${sizeClasses[size]} rounded-full flex items-center justify-center font-bold shrink-0 overflow-hidden bg-indigo-100 text-indigo-700 border border-slate-200 ${
-        onClick ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''
-      }`}
-    >
-      {url ? (
-        <img src={url} alt={nickname || 'ユーザー'} className="w-full h-full object-cover" />
-      ) : (
-        <span>{nickname ? nickname[0] : 'ユ'}</span>
-      )}
-    </div>
-  )
 }
 
 export default function App() {
@@ -1339,10 +619,10 @@ export default function App() {
     }
     setAvatarUrl(data.avatar_url || '')
     setBio(data.bio || '')
-    if (data.user_urls && Array.isArray(data.user_urls) && data.user_urls.length > 0) {
-      setUserUrls(data.user_urls)
-    } else if (data.user_url) {
-      setUserUrls([data.user_url])
+      if (data.user_urls && Array.isArray(data.user_urls) && data.user_urls.length > 0) {
+        setUserUrls(data.user_urls)
+      } else if (data.user_url) {
+        setUserUrls([data.user_url])
     } else {
       setUserUrls([''])
     }
@@ -1819,7 +1099,7 @@ export default function App() {
       searchFilterKeyRef.current = filterKey
       result = shuffleList(result)
       searchOrderRef.current = result.map((p) => p.id)
-      setFilteredPosts(result)
+    setFilteredPosts(result)
       return
     }
 
@@ -1925,6 +1205,11 @@ export default function App() {
 
     const urls = files.map((file) => URL.createObjectURL(file))
     setPreviewUrls(urls)
+  }
+
+  const handlePreviewReorder = (from: number, to: number) => {
+    setSelectedFiles((files) => moveItem(files, from, to))
+    setPreviewUrls((urls) => moveItem(urls, from, to))
   }
 
   const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2041,11 +1326,11 @@ export default function App() {
       const areaBand = FLOOR_AREA_BANDS.find((b) => b.value === floorAreaBand)
 
       const postPayload = {
-        image_urls: uploadedUrls,
-        image_url: uploadedUrls[0],
-        doc_type: docType,
-        layout: layout,
-        floors: floors,
+          image_urls: uploadedUrls,
+          image_url: uploadedUrls[0],
+          doc_type: docType,
+          layout: layout,
+          floors: floors,
         maker: maker,
         floor_area_min: areaBand ? areaBand.min : null,
         floor_area_max: areaBand ? areaBand.max : null,
@@ -2054,10 +1339,10 @@ export default function App() {
           min: areaBand ? areaBand.min : null,
           max: areaBand ? areaBand.max : null,
         }),
-        nickname: nickname,
-        avatar_url: avatarUrl,
-        bio: bio,
-        user_urls: filteredUrls,
+          nickname: nickname,
+          avatar_url: avatarUrl,
+          bio: bio,
+          user_urls: filteredUrls,
         user_id: session.user.id,
         user_email: session.user.email,
       }
@@ -2481,18 +1766,18 @@ export default function App() {
             {c.nickname === 'ゲスト' ? (
               <span className="font-bold text-xs text-slate-800">ゲスト</span>
             ) : (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
                   openUserProfile(
                     { nickname: c.nickname, avatar_url: c.avatar_url, user_urls: c.user_urls, bio: c.bio, user_id: c.user_id, user_email: c.user_email },
                     e
                   )
-                }}
-                className="font-bold text-xs text-slate-800 hover:underline cursor-pointer"
-              >
-                {c.nickname}
-              </button>
+              }}
+              className="font-bold text-xs text-slate-800 hover:underline cursor-pointer"
+            >
+              {c.nickname}
+            </button>
             )}
             {quals.map((q, idx) => (
               <span
@@ -2617,16 +1902,11 @@ export default function App() {
               {previewUrls.length > 0 && (
                 <div className="mt-2 space-y-1">
                   <p className="text-xs text-slate-500 font-semibold">選択中: {previewUrls.length}枚</p>
-                  <div className="flex gap-2 overflow-x-auto pb-2">
-                    {previewUrls.map((url, idx) => (
-                      <img
-                        key={idx}
-                        src={url}
-                        alt={`プレビュー ${idx + 1}`}
-                        className="w-20 h-20 object-cover rounded-lg border border-slate-200 shrink-0"
-                      />
-                    ))}
-                  </div>
+                  <ImagePreviewReorder
+                    urls={previewUrls}
+                    onReorder={handlePreviewReorder}
+                    onOpen={(index) => setImageLightbox({ images: previewUrls, index })}
+                  />
                 </div>
               )}
 
@@ -3019,12 +2299,12 @@ export default function App() {
                             <MessageCircle className="w-4 h-4" />
                             コメント求む
                             {postComments.length > 0 ? ` ${postComments.length}` : ''}
-                          </span>
+                        </span>
                         ) : (
-                          <span className="flex items-center gap-1">
-                            <MessageCircle className="w-4 h-4" />
-                            {postComments.length}
-                          </span>
+                        <span className="flex items-center gap-1">
+                          <MessageCircle className="w-4 h-4" />
+                          {postComments.length}
+                        </span>
                         )}
                       </div>
                     </div>
@@ -3816,16 +3096,12 @@ export default function App() {
             {/* 送信予定の画像プレビュー */}
             <div className="space-y-1.5">
               <p className="text-xs font-semibold text-slate-500">投稿画像のプレビュー ({previewUrls.length}枚)</p>
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {previewUrls.map((url, idx) => (
-                  <img
-                    key={idx}
-                    src={url}
-                    alt={`確認画像 ${idx + 1}`}
-                    className="w-20 h-20 object-cover rounded-lg border border-slate-200 shrink-0"
-                  />
-                ))}
-              </div>
+              <ImagePreviewReorder
+                urls={previewUrls}
+                onReorder={handlePreviewReorder}
+                onOpen={(index) => setImageLightbox({ images: previewUrls, index })}
+                altPrefix="確認画像"
+              />
             </div>
 
             <div className="grid grid-cols-2 gap-2.5 pt-2">
@@ -4127,7 +3403,7 @@ export default function App() {
             }`}
           >
             <span className="relative">
-              <Home className="w-5 h-5" />
+            <Home className="w-5 h-5" />
               <NavBadge count={unreadCommentCount} />
             </span>
             ホーム
