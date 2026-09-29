@@ -41,7 +41,17 @@ export const MAKER_OPTIONS = [
   '住友不動産',
   'セルコホーム',
   'アエラホーム',
+  '地元工務店',
   'その他',
+]
+
+export const COMMENT_PRESETS = [
+  '家事・生活動線がスムーズか知りたい',
+  '収納が足りるか不安',
+  '日当たりや明るさが心配',
+  'デッドスペースや無駄な廊下がないか見てほしい',
+  '予算を抑えるアイデアが欲しい',
+  '全般的な感想がほしい',
 ]
 
 export const QUALIFICATION_OPTIONS = [

@@ -17,6 +17,7 @@ import {
   FLOOR_AREA_BANDS,
   MAKER_OPTIONS,
   QUALIFICATION_OPTIONS,
+  COMMENT_PRESETS,
 } from '@/lib/constants'
 import { encodePostMetaComment, withPostMeta } from '@/lib/post-meta'
 import type { ChatMessage, Comment, Post, UserProfileView, UserQualification } from '@/lib/types'
@@ -245,6 +246,7 @@ export default function App() {
   const [floorAreaBand, setFloorAreaBand] = useState('')
   const [maker, setMaker] = useState('')
   const [comment, setComment] = useState('')
+  const [showCommentPresets, setShowCommentPresets] = useState(false)
   const [showPrivacyConfirm, setShowPrivacyConfirm] = useState(false) // 個人情報確認ダイアログ制御
 
   // 検索フィルター
@@ -269,6 +271,7 @@ export default function App() {
   const likeInFlight = useRef<Set<number>>(new Set())
   const searchOrderRef = useRef<number[]>([])
   const searchFilterKeyRef = useRef('')
+  const commentPresetWrapRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     fetchPosts(null)
@@ -337,7 +340,20 @@ export default function App() {
       setShowQualApply(false)
       setShowContactForm(false)
     }
+    if (activeTab !== 'home') {
+      setShowCommentPresets(false)
+    }
   }, [activeTab])
+
+  useEffect(() => {
+    if (!showCommentPresets) return
+    const hideIfOutside = (e: PointerEvent) => {
+      if (commentPresetWrapRef.current?.contains(e.target as Node)) return
+      setShowCommentPresets(false)
+    }
+    document.addEventListener('pointerdown', hideIfOutside)
+    return () => document.removeEventListener('pointerdown', hideIfOutside)
+  }, [showCommentPresets])
 
   useEffect(() => {
     if (!session?.user) {
@@ -2012,15 +2028,39 @@ export default function App() {
                 </select>
               </div>
 
-              <div>
+              <div ref={commentPresetWrapRef}>
                 <label className="block text-xs font-semibold text-slate-500 mb-1">説明・コメント</label>
                 <textarea
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
+                  onFocus={() => setShowCommentPresets(true)}
+                  onPointerDown={() => setShowCommentPresets(true)}
                   placeholder="アドバイスしてほしい点などを入力（改行できます）"
                   rows={4}
                   className="w-full p-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 whitespace-pre-wrap resize-y min-h-[88px]"
                 />
+                {showCommentPresets && (
+                  <div className="mt-1.5 space-y-1">
+                    {COMMENT_PRESETS.map((text) => (
+                      <button
+                        key={text}
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setComment(text)
+                          setShowCommentPresets(false)
+                        }}
+                        className={`w-full text-left text-xs px-2.5 py-2 rounded-lg border cursor-pointer ${
+                          comment === text
+                            ? 'border-indigo-400 bg-indigo-50 text-indigo-700 font-semibold'
+                            : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        {text}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <button
