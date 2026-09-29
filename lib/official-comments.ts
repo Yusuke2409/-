@@ -156,6 +156,47 @@ function commentToneMix(count: number) {
   return { polite, casual }
 }
 
+function isPoliteComment(text: string) {
+  const t = String(text || '').replace(/\s+/g, '')
+  if (/です|ます|ですね|と思います|でしょうか/.test(t)) return true
+  if (/したら？|いいと思う|かな(?!り)|かも/.test(t)) return false
+  return t.includes('。')
+}
+
+function interleaveByTone(comments: string[]) {
+  const polite: string[] = []
+  const casual: string[] = []
+  for (const item of comments) {
+    if (isPoliteComment(item)) polite.push(item)
+    else casual.push(item)
+  }
+  const politeQ = shufflePick(polite, polite.length)
+  const casualQ = shufflePick(casual, casual.length)
+  const mixed: string[] = []
+  let politeStreak = 0
+  let casualStreak = 0
+  while (politeQ.length > 0 || casualQ.length > 0) {
+    const canPolite = politeQ.length > 0
+    const canCasual = casualQ.length > 0
+    let takePolite = canPolite
+    if (canPolite && canCasual) {
+      if (politeStreak >= 2) takePolite = false
+      else if (casualStreak >= 2) takePolite = true
+      else takePolite = Math.random() < 0.5
+    }
+    if (takePolite) {
+      mixed.push(politeQ.shift() as string)
+      politeStreak += 1
+      casualStreak = 0
+    } else {
+      mixed.push(casualQ.shift() as string)
+      casualStreak += 1
+      politeStreak = 0
+    }
+  }
+  return mixed
+}
+
 function cleanComment(text: string) {
   const lines = String(text || '')
     .replace(/\r\n/g, '\n')
@@ -217,7 +258,7 @@ ${args.comment || '（説明なし）'}
 - 1行はだいたい8〜22字。3行でも長くしすぎない
 - 画像と投稿者の説明の両方を見て書く。説明に書いてある悩みや希望には、いくつか返事する
 - 良い点か、軽い改善案
-- 同じ内容を繰り返さない。配列の順番は丁寧語とため口、1行・2行・3行を混ぜる
+- 同じ内容を繰り返さない。配列の順番は丁寧語とため口を交互に近い形で織り交ぜる（丁寧語を先に全部並べてからため口、は禁止）
 - 専門家っぽい堅い言い方は禁止（論文調・命令調はNG）
 - 丁寧語はですます調でやわらかく。ため口は友達に話す感じ
 - 「！」はほぼ使わない（${args.count}個のうち多くて1個）
@@ -279,7 +320,7 @@ export async function makeOfficialComments(args: {
     unique.push(item)
     if (unique.length >= wanted) break
   }
-  return { comments: limitExclamationMarks(unique), aiCount: fromAi.length }
+  return { comments: interleaveByTone(limitExclamationMarks(unique)), aiCount: fromAi.length }
 }
 
 export async function loadOfficialAccounts(supabase: SupabaseClient) {
@@ -332,11 +373,12 @@ export async function scheduleOfficialComments(postId: number) {
       ? [post.image_url]
       : []
   const runAts = staggerRunTimes(picked.length)
+  const fallbackOrder = interleaveByTone(FALLBACK_COMMENTS)
   const rows = picked.map((account, index) => ({
     post_id: postId,
     account_email: account.email,
     nickname: account.nickname,
-    content: FALLBACK_COMMENTS[index % FALLBACK_COMMENTS.length],
+    content: fallbackOrder[index % fallbackOrder.length],
     run_at: runAts[index].toISOString(),
     status: 'pending',
   }))
