@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import {
   attachAccountToUserRow,
@@ -49,6 +49,7 @@ import {
   CornerDownRight,
   ChevronDown,
   ChevronUp,
+  ArrowLeft,
   ThumbsUp,
   ThumbsDown,
   ExternalLink,
@@ -272,6 +273,8 @@ export default function App() {
   const searchOrderRef = useRef<number[]>([])
   const searchFilterKeyRef = useRef('')
   const commentPresetWrapRef = useRef<HTMLDivElement>(null)
+  const feedScrollRef = useRef(0)
+  const restoreFeedScrollRef = useRef(false)
 
   useEffect(() => {
     fetchPosts(null)
@@ -581,6 +584,9 @@ export default function App() {
   }
 
   const goToHome = () => {
+    restoreFeedScrollRef.current = false
+    closeSelectedPost({ restoreScroll: false })
+    setViewUserProfile(null)
     setActiveTab('home')
     window.setTimeout(() => {
       window.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
@@ -588,6 +594,9 @@ export default function App() {
   }
 
   const goToSearch = () => {
+    restoreFeedScrollRef.current = false
+    closeSelectedPost({ restoreScroll: false })
+    setViewUserProfile(null)
     setActiveTab('search')
     window.setTimeout(() => {
       window.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
@@ -599,6 +608,9 @@ export default function App() {
       requireLogin()
       return
     }
+    restoreFeedScrollRef.current = false
+    closeSelectedPost({ restoreScroll: false })
+    setViewUserProfile(null)
     setSelectedChatNick(null)
     setActiveTab('messages')
     fetchMessages()
@@ -976,7 +988,7 @@ export default function App() {
     }
 
     setViewUserProfile(null)
-    closeSelectedPost()
+    closeSelectedPost({ restoreScroll: false })
 
     if (!session?.user) {
       requireLogin()
@@ -1512,15 +1524,33 @@ export default function App() {
     setModalCommentInput('')
   }
 
-  const closeSelectedPost = () => {
+  const saveFeedScrollIfOnFeed = () => {
+    if (!selectedPost && !viewUserProfile) {
+      feedScrollRef.current = window.scrollY || document.documentElement.scrollTop
+    }
+  }
+
+  const closeSelectedPost = (options?: { restoreScroll?: boolean }) => {
     setSelectedPost(null)
     resetPostCommentUi()
+    if (options?.restoreScroll !== false) {
+      restoreFeedScrollRef.current = true
+    }
   }
 
   const openSelectedPost = (post: Post) => {
+    saveFeedScrollIfOnFeed()
     setSelectedPost(post)
     resetPostCommentUi()
   }
+
+  useLayoutEffect(() => {
+    if (selectedPost || viewUserProfile) return
+    if (!restoreFeedScrollRef.current) return
+    restoreFeedScrollRef.current = false
+    const y = feedScrollRef.current
+    window.scrollTo({ top: y, left: 0, behavior: 'auto' })
+  }, [selectedPost, viewUserProfile])
 
   const toggleReplyExpand = (commentId: number) => {
     setExpandedCommentIds((prev) =>
@@ -1592,6 +1622,7 @@ export default function App() {
   const openUserProfile = async (user: UserProfileView, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
     if (!user.nickname || user.nickname === 'ゲスト') return
+    saveFeedScrollIfOnFeed()
 
     let row = null as any
     if (user.user_email) {
@@ -1916,7 +1947,7 @@ export default function App() {
         </button>
       )}
 
-      <main className="max-w-lg mx-auto p-4">
+      <main className={selectedPost || viewUserProfile ? 'hidden' : 'max-w-lg mx-auto p-4'}>
         {/* ホームタブ */}
         {activeTab === 'home' && (
           <div className="space-y-6">
@@ -2525,26 +2556,31 @@ export default function App() {
                       </button>
                     </div>
                   )}
-                  <div className="flex gap-2 items-center">
+                  <div className="flex gap-2 items-end">
                     <label className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg cursor-pointer shrink-0">
                       <ImageIcon className="w-5 h-5" />
                       <input type="file" accept="image/*" onChange={handleChatImageChange} className="hidden" />
                     </label>
-                  <input
-                    type="text"
+                  <textarea
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="メッセージを入力..."
-                    className="flex-1 p-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="メッセージを入力（改行できます。送信は右のボタン）"
+                    rows={3}
+                    className="flex-1 p-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 whitespace-pre-wrap resize-y min-h-[72px]"
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleSendChat()
+                      if (e.key !== 'Enter') return
+                      if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                      if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault()
+                        handleSendChat()
+                      }
                     }}
                   />
                   <button
                     type="button"
                     onClick={handleSendChat}
                     disabled={sendingChat}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg cursor-pointer disabled:opacity-50"
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg cursor-pointer disabled:opacity-50 shrink-0"
                   >
                     <Send className="w-4 h-4" />
                   </button>
@@ -3184,12 +3220,20 @@ export default function App() {
         </div>
       )}
 
-      {/* 投稿詳細モーダル (z-50) */}
-      {selectedPost && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white w-full max-w-lg rounded-2xl overflow-hidden shadow-xl max-h-[90vh] flex flex-col my-auto">
-            <div className="p-3 border-b border-slate-100 flex items-center justify-between bg-white sticky top-0 z-10">
-              <div className="flex items-center gap-2.5">
+      {/* 投稿詳細（ホームの上に重ねず、この画面だけを表示） */}
+      {selectedPost && !viewUserProfile && (
+        <div className="fixed inset-0 z-[35] bg-slate-50 flex flex-col h-dvh overflow-hidden">
+          <div className="bg-[#F3E8D8] border-b border-[#E4D5C1] px-2 py-2.5 flex items-center justify-between gap-2 shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <button
+                type="button"
+                onClick={closeSelectedPost}
+                className="p-1.5 text-slate-600 hover:text-slate-800 rounded-full hover:bg-white/60 cursor-pointer shrink-0"
+                aria-label="戻る"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+              <div className="flex items-center gap-2.5 min-w-0">
                 <AvatarIcon
                   url={selectedPost.avatar_url}
                   nickname={selectedPost.nickname}
@@ -3208,7 +3252,7 @@ export default function App() {
                     )
                   }
                 />
-                <div>
+                <div className="min-w-0">
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
@@ -3224,7 +3268,7 @@ export default function App() {
                         e
                       )
                     }}
-                    className="font-bold text-xs text-slate-800 hover:underline cursor-pointer block"
+                    className="font-bold text-xs text-slate-800 hover:underline cursor-pointer block truncate"
                   >
                     {selectedPost.nickname || '匿名ユーザー'}
                   </button>
@@ -3233,27 +3277,21 @@ export default function App() {
                   </p>
                 </div>
               </div>
-
-              <div className="flex items-center gap-2">
-                {isMine(selectedPost) && (
-                  <button
-                    onClick={(e) => handleDeletePost(selectedPost.id, selectedPost.image_urls, e)}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
-                    title="投稿を削除"
-                  >
-                    <Trash2 className="w-5 h-5 text-rose-500" />
-                  </button>
-                )}
-                <button
-                  onClick={closeSelectedPost}
-                  className="p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
             </div>
 
-            <div className="overflow-y-auto flex-1 p-4 space-y-4">
+            {isMine(selectedPost) && (
+              <button
+                onClick={(e) => handleDeletePost(selectedPost.id, selectedPost.image_urls, e)}
+                className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
+                title="投稿を削除"
+              >
+                <Trash2 className="w-5 h-5 text-rose-500" />
+              </button>
+            )}
+          </div>
+
+          <div className="overflow-y-auto flex-1 min-h-0">
+            <div className="max-w-lg mx-auto p-4 space-y-4 pb-4">
               <ImageCarousel
                 images={selectedPost.image_urls}
                 onOpenLightbox={(index) => setImageLightbox({ images: selectedPost.image_urls, index })}
@@ -3262,7 +3300,7 @@ export default function App() {
               <PostMetaTags post={selectedPost} />
 
               {selectedPost.comment && (
-                <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                <div className="bg-white p-3 rounded-lg border border-slate-100">
                   <ExpandableText text={selectedPost.comment} className="text-sm text-slate-800" />
                 </div>
               )}
@@ -3317,44 +3355,44 @@ export default function App() {
                 </div>
               </div>
             </div>
+          </div>
 
-            <div className="p-3 border-t border-slate-100 bg-white space-y-2">
-              {replyTarget && (
-                <div className="flex items-center justify-between text-xs bg-indigo-50 text-indigo-700 p-1.5 px-3 rounded-lg">
-                  <span className="truncate">「{replyTarget.nickname}」さんへ返信中</span>
-                  <button onClick={() => setReplyTarget(null)} className="text-slate-400 hover:text-slate-600">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-              <div className="flex gap-2 items-end">
-                <textarea
-                  value={modalCommentInput}
-                  onChange={(e) => setModalCommentInput(e.target.value)}
-                  placeholder={
-                    replyTarget
-                      ? '返信を入力（改行できます。送信は右のボタン）'
-                      : 'コメントを入力（改行できます。送信は右のボタン）'
-                  }
-                  rows={3}
-                  className="flex-1 p-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 whitespace-pre-wrap resize-y min-h-[72px]"
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter') return
-                    if (e.nativeEvent.isComposing || e.keyCode === 229) return
-                    if (e.ctrlKey || e.metaKey) {
-                      e.preventDefault()
-                      handleAddModalComment(selectedPost.id)
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => handleAddModalComment(selectedPost.id)}
-                  className="bg-indigo-600 text-white p-2 rounded-lg hover:bg-indigo-700 transition-colors shrink-0 cursor-pointer"
-                >
-                  <Send className="w-4 h-4" />
+          <div className="p-3 border-t border-slate-100 bg-white space-y-2 shrink-0 relative z-10 pb-[calc(4.25rem+env(safe-area-inset-bottom,0px))]">
+            {replyTarget && (
+              <div className="flex items-center justify-between text-xs bg-indigo-50 text-indigo-700 p-1.5 px-3 rounded-lg max-w-lg mx-auto">
+                <span className="truncate">「{replyTarget.nickname}」さんへ返信中</span>
+                <button onClick={() => setReplyTarget(null)} className="text-slate-400 hover:text-slate-600">
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
+            )}
+            <div className="flex gap-2 items-end max-w-lg mx-auto">
+              <textarea
+                value={modalCommentInput}
+                onChange={(e) => setModalCommentInput(e.target.value)}
+                placeholder={
+                  replyTarget
+                    ? '返信を入力（改行できます。送信は右のボタン）'
+                    : 'コメントを入力（改行できます。送信は右のボタン）'
+                }
+                rows={3}
+                className="flex-1 p-2 text-xs border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 whitespace-pre-wrap resize-y min-h-[72px]"
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                  if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault()
+                    handleAddModalComment(selectedPost.id)
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => handleAddModalComment(selectedPost.id)}
+                className="bg-indigo-600 text-white p-2 rounded-lg hover:bg-indigo-700 transition-colors shrink-0 cursor-pointer"
+              >
+                <Send className="w-4 h-4" />
+              </button>
             </div>
           </div>
         </div>
@@ -3362,93 +3400,101 @@ export default function App() {
 
       {/* プロフィール閲覧ポップアップ (z-60) */}
       {viewUserProfile && (
-        <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-sm rounded-2xl overflow-hidden shadow-xl p-5 space-y-4 text-center relative">
+        <div className="fixed inset-0 z-[38] bg-slate-50 flex flex-col h-dvh overflow-hidden">
+          <div className="bg-[#F3E8D8] border-b border-[#E4D5C1] px-2 py-2.5 flex items-center gap-2 shrink-0">
             <button
-              onClick={() => setViewUserProfile(null)}
-              className="absolute top-3 right-3 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 cursor-pointer"
+              type="button"
+              onClick={() => {
+                setViewUserProfile(null)
+                if (!selectedPost) restoreFeedScrollRef.current = true
+              }}
+              className="p-1.5 text-slate-600 hover:text-slate-800 rounded-full hover:bg-white/60 cursor-pointer shrink-0"
+              aria-label="戻る"
             >
-              <X className="w-5 h-5" />
+              <ArrowLeft className="w-5 h-5" />
             </button>
+            <p className="font-bold text-sm text-slate-800 truncate">{viewUserProfile.nickname}</p>
+          </div>
 
-            <div className="flex flex-col items-center gap-2 pt-2">
-              <AvatarIcon
-                url={viewUserProfile.avatar_url}
-                nickname={viewUserProfile.nickname}
-                size="lg"
-              />
-              <h3 className="font-bold text-lg text-slate-800">{viewUserProfile.nickname}</h3>
+          <div className="overflow-y-auto flex-1 min-h-0 pb-[calc(4.25rem+env(safe-area-inset-bottom,0px))]">
+            <div className="max-w-lg mx-auto p-5 space-y-4">
+              <div className="flex flex-col items-center gap-2 pt-2 text-center">
+                <AvatarIcon
+                  url={viewUserProfile.avatar_url}
+                  nickname={viewUserProfile.nickname}
+                  size="lg"
+                />
+                <h3 className="font-bold text-lg text-slate-800">{viewUserProfile.nickname}</h3>
 
-              {getApprovedQualsForUser(viewUserProfile).length > 0 && (
-                <div className="flex flex-wrap justify-center gap-1">
-                  {getApprovedQualsForUser(viewUserProfile).map((q, idx) => (
-                    <span
+                {getApprovedQualsForUser(viewUserProfile).length > 0 && (
+                  <div className="flex flex-wrap justify-center gap-1">
+                    {getApprovedQualsForUser(viewUserProfile).map((q, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center gap-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full text-xs font-bold"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                        {q}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {viewUserProfile.bio && (
+                  <p className="text-xs text-slate-600 bg-white p-2.5 rounded-lg border border-slate-100 w-full whitespace-pre-wrap mt-1 text-left">
+                    {viewUserProfile.bio}
+                  </p>
+                )}
+              </div>
+
+              {Array.isArray(viewUserProfile.user_urls) && viewUserProfile.user_urls.length > 0 && (
+                <div className="space-y-1.5">
+                  {viewUserProfile.user_urls.map((url, idx) => (
+                    <a
                       key={idx}
-                      className="inline-flex items-center gap-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full text-xs font-bold"
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center gap-1.5 w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold py-2 px-3 rounded-lg text-xs transition-colors border border-indigo-100 truncate"
                     >
-                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                      {q}
-                    </span>
+                      <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">{url}</span>
+                    </a>
                   ))}
                 </div>
               )}
 
-              {/* 自己紹介表示 */}
-              {viewUserProfile.bio && (
-                <p className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-lg border border-slate-100 w-full whitespace-pre-wrap mt-1">
-                  {viewUserProfile.bio}
-                </p>
+              {viewUserProfile.nickname !== nickname && (
+                <button
+                  type="button"
+                  onClick={(e) => openChatWith(viewUserProfile.nickname, e)}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  メッセージ
+                </button>
               )}
-            </div>
 
-            {/* URL表示 (最大3件) */}
-            {Array.isArray(viewUserProfile.user_urls) && viewUserProfile.user_urls.length > 0 && (
-              <div className="space-y-1.5 pt-1">
-                {viewUserProfile.user_urls.map((url, idx) => (
-                  <a
-                    key={idx}
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center justify-center gap-1.5 w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold py-2 px-3 rounded-lg text-xs transition-colors border border-indigo-100 truncate"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">{url}</span>
-                  </a>
-                ))}
-              </div>
-            )}
-
-            {viewUserProfile.nickname !== nickname && (
-              <button
-                type="button"
-                onClick={(e) => openChatWith(viewUserProfile.nickname, e)}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <MessageSquare className="w-4 h-4" />
-                メッセージ
-              </button>
-            )}
-
-            <div className="text-left pt-2 border-t border-slate-100 space-y-2">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                {viewUserProfile.nickname} さんの投稿一覧
-              </p>
-              <div className="grid grid-cols-3 gap-1.5 max-h-48 overflow-y-auto">
-                {posts
-                  .filter((p) => p.nickname === viewUserProfile.nickname)
-                  .map((p) => (
-                    <div
-                      key={p.id}
-                      onClick={() => {
-                        openSelectedPost(p)
-                        setViewUserProfile(null)
-                      }}
-                      className="aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-100 cursor-pointer hover:opacity-80"
-                    >
-                      <img src={p.image_urls[0]} alt="投稿" className="w-full h-full object-cover" />
-                    </div>
-                  ))}
+              <div className="text-left pt-2 border-t border-slate-200 space-y-2">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  {viewUserProfile.nickname} さんの投稿一覧
+                </p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {posts
+                    .filter((p) => p.nickname === viewUserProfile.nickname)
+                    .map((p) => (
+                      <div
+                        key={p.id}
+                        onClick={() => {
+                          openSelectedPost(p)
+                          setViewUserProfile(null)
+                        }}
+                        className="aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-100 cursor-pointer hover:opacity-80"
+                      >
+                        <img src={p.image_urls[0]} alt="投稿" className="w-full h-full object-cover" />
+                      </div>
+                    ))}
+                </div>
               </div>
             </div>
           </div>
@@ -3492,7 +3538,12 @@ export default function App() {
             メッセージ
           </button>
           <button
-            onClick={() => setActiveTab('favorites')}
+            onClick={() => {
+              restoreFeedScrollRef.current = false
+              closeSelectedPost({ restoreScroll: false })
+              setViewUserProfile(null)
+              setActiveTab('favorites')
+            }}
             className={`flex flex-col items-center justify-center gap-1 text-xs cursor-pointer ${
               activeTab === 'favorites' ? 'text-indigo-600 font-bold' : 'text-slate-400'
             }`}
@@ -3501,7 +3552,12 @@ export default function App() {
             お気に入り
           </button>
           <button
-            onClick={() => setActiveTab('mypage')}
+            onClick={() => {
+              restoreFeedScrollRef.current = false
+              closeSelectedPost({ restoreScroll: false })
+              setViewUserProfile(null)
+              setActiveTab('mypage')
+            }}
             className={`flex flex-col items-center justify-center gap-1 text-xs cursor-pointer ${
               activeTab === 'mypage' ? 'text-indigo-600 font-bold' : 'text-slate-400'
             }`}
