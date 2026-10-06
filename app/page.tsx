@@ -2178,10 +2178,7 @@ export default function App() {
 
                     <PostMetaTags post={post} className="px-3" />
 
-                    <ImageCarousel
-                      images={post.image_urls}
-                      onOpenLightbox={(index) => setImageLightbox({ images: post.image_urls, index })}
-                    />
+                    <ImageCarousel images={post.image_urls} />
 
                     <div className="px-3 pb-3 space-y-2">
                       {post.comment && (
@@ -2370,10 +2367,7 @@ export default function App() {
                     className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm cursor-pointer hover:border-slate-300"
                   >
                     <div className="relative">
-                      <ImageCarousel
-                        images={post.image_urls}
-                        onOpenLightbox={(index) => setImageLightbox({ images: post.image_urls, index })}
-                      />
+                      <ImageCarousel images={post.image_urls} />
                       {postComments.length < 15 && (
                         <span className="absolute top-2 left-2 z-[1] bg-rose-500 text-white text-[11px] font-bold px-2.5 py-1 rounded-full shadow-md">
                           コメント求む
@@ -2444,10 +2438,7 @@ export default function App() {
                   onClick={() => openSelectedPost(post)}
                   className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm cursor-pointer hover:border-slate-300"
                 >
-                  <ImageCarousel
-                    images={post.image_urls}
-                    onOpenLightbox={(index) => setImageLightbox({ images: post.image_urls, index })}
-                  />
+                  <ImageCarousel images={post.image_urls} />
                   <div className="p-3 space-y-2">
                     {post.comment && (
                       <ExpandableText text={post.comment} className="text-sm text-slate-700" />
@@ -3227,7 +3218,7 @@ export default function App() {
             <div className="flex items-center gap-2 min-w-0">
               <button
                 type="button"
-                onClick={closeSelectedPost}
+                onClick={() => closeSelectedPost()}
                 className="p-1.5 text-slate-600 hover:text-slate-800 rounded-full hover:bg-white/60 cursor-pointer shrink-0"
                 aria-label="戻る"
               >

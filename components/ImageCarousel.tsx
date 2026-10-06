@@ -40,10 +40,11 @@ export function ImageCarousel({
   }
 
   const openLightbox = (e: React.MouseEvent | React.PointerEvent) => {
-    e.stopPropagation()
     if ((e.target as HTMLElement).closest('button')) return
     if (movedRef.current) return
-    onOpenLightbox?.(indexRef.current)
+    if (!onOpenLightbox) return
+    e.stopPropagation()
+    onOpenLightbox(indexRef.current)
   }
 
   return (
@@ -51,14 +52,17 @@ export function ImageCarousel({
       <div
         className="hidden md:block"
         onClick={(e) => {
+          if (!onOpenLightbox) return
           e.stopPropagation()
-          onOpenLightbox?.(currentIndex)
+          onOpenLightbox(currentIndex)
         }}
       >
         <img
           src={images[currentIndex]}
           alt={`図面 ${currentIndex + 1}`}
-          className="w-full h-auto max-h-96 object-contain mx-auto cursor-zoom-in"
+          className={`w-full h-auto max-h-96 object-contain mx-auto ${
+            onOpenLightbox ? 'cursor-zoom-in' : 'cursor-pointer'
+          }`}
         />
       </div>
 
@@ -99,7 +103,9 @@ export function ImageCarousel({
               src={src}
               alt={`図面 ${idx + 1}`}
               draggable={false}
-              className="w-full h-auto max-h-96 object-contain mx-auto select-none cursor-zoom-in"
+              className={`w-full h-auto max-h-96 object-contain mx-auto select-none ${
+                onOpenLightbox ? 'cursor-zoom-in' : 'cursor-pointer'
+              }`}
             />
           </div>
         ))}
