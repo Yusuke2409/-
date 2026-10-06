@@ -3214,22 +3214,20 @@ export default function App() {
       {/* 投稿詳細（ホームの上に重ねず、この画面だけを表示） */}
       {selectedPost && !viewUserProfile && (
         <div className="fixed inset-0 z-[35] bg-slate-50 flex flex-col h-dvh overflow-hidden">
-          <div className="bg-[#F3E8D8] border-b border-[#E4D5C1] px-2 py-2.5 flex items-center justify-between gap-2 shrink-0">
-            <div className="flex items-center gap-2 min-w-0">
-              <button
-                type="button"
-                onClick={() => closeSelectedPost()}
-                className="p-1.5 text-slate-600 hover:text-slate-800 rounded-full hover:bg-white/60 cursor-pointer shrink-0"
-                aria-label="戻る"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-              <div className="flex items-center gap-2.5 min-w-0">
-                <AvatarIcon
-                  url={selectedPost.avatar_url}
-                  nickname={selectedPost.nickname}
-                  size="sm"
-                  onClick={(e) =>
+          <div className="bg-[#F3E8D8] border-b border-[#E4D5C1] px-2 py-2.5 flex items-center justify-between gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => closeSelectedPost()}
+              className="p-2.5 text-slate-600 hover:text-slate-800 rounded-full hover:bg-white/60 cursor-pointer shrink-0"
+              aria-label="戻る"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-2 shrink-0 ml-auto">
+              <div className="min-w-0 text-right">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
                     openUserProfile(
                       {
                         nickname: selectedPost.nickname || '匿名ユーザー',
@@ -3241,44 +3239,43 @@ export default function App() {
                       },
                       e
                     )
-                  }
-                />
-                <div className="min-w-0">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      openUserProfile(
-                        {
-                          nickname: selectedPost.nickname || '匿名ユーザー',
-                          avatar_url: selectedPost.avatar_url,
-                          user_urls: selectedPost.user_urls,
-                          bio: selectedPost.bio,
-                          user_id: selectedPost.user_id,
-                          user_email: selectedPost.user_email,
-                        },
-                        e
-                      )
-                    }}
-                    className="font-bold text-xs text-slate-800 hover:underline cursor-pointer block truncate"
-                  >
-                    {selectedPost.nickname || '匿名ユーザー'}
-                  </button>
-                  <p className="text-[10px] text-slate-400">
-                    {new Date(selectedPost.created_at).toLocaleDateString()}
-                  </p>
-                </div>
+                  }}
+                  className="font-bold text-xs text-slate-800 hover:underline cursor-pointer block truncate max-w-[40vw]"
+                >
+                  {selectedPost.nickname || '匿名ユーザー'}
+                </button>
+                <p className="text-[10px] text-slate-400">
+                  {new Date(selectedPost.created_at).toLocaleDateString()}
+                </p>
               </div>
+              <AvatarIcon
+                url={selectedPost.avatar_url}
+                nickname={selectedPost.nickname}
+                size="sm"
+                onClick={(e) =>
+                  openUserProfile(
+                    {
+                      nickname: selectedPost.nickname || '匿名ユーザー',
+                      avatar_url: selectedPost.avatar_url,
+                      user_urls: selectedPost.user_urls,
+                      bio: selectedPost.bio,
+                      user_id: selectedPost.user_id,
+                      user_email: selectedPost.user_email,
+                    },
+                    e
+                  )
+                }
+              />
+              {isMine(selectedPost) && (
+                <button
+                  onClick={(e) => handleDeletePost(selectedPost.id, selectedPost.image_urls, e)}
+                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
+                  title="投稿を削除"
+                >
+                  <Trash2 className="w-5 h-5 text-rose-500" />
+                </button>
+              )}
             </div>
-
-            {isMine(selectedPost) && (
-              <button
-                onClick={(e) => handleDeletePost(selectedPost.id, selectedPost.image_urls, e)}
-                className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
-                title="投稿を削除"
-              >
-                <Trash2 className="w-5 h-5 text-rose-500" />
-              </button>
-            )}
           </div>
 
           <div className="overflow-y-auto flex-1 min-h-0">
