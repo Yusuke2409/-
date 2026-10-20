@@ -125,21 +125,21 @@ function stripPostMeta(comment: string) {
 }
 
 const FALLBACK_COMMENTS = [
-  '動線がいいですね',
-  '収納は充分だと思います。',
-  'LDK広くていいですね',
-  '洗面はもう少し右の方がいいと思います。',
-  '窓の位置がいいですね',
-  '家事動線よさげ\n収納多いのがいいと思う',
-  'キッチン対面がいいですね\nパントリーもあると助かります。',
-  'WICあるの羨ましい\n廊下ちょっと長い気がする',
-  '南向きで明るくていいですね\n玄関収納はもう少し欲しいかも',
-  '水回り近いのがいいと思う\nトイレ位置は変えたら？',
-  '全体のバランスは良さそうです。\nLDK広めで明るいと思います。\n廊下は少し長い気がします。',
-  '動線スムーズでいいと思う\n洗面もう少し右にしたら？\n収納量は充分そう',
-  '玄関まわり便利そうですね\n階段位置はもう一声かもしれません。\n子ども部屋はちょうどいいです。',
-  'お風呂広めがいいと思う\n家事動線もきれい\nリビングの向き気になる',
-  '間取りわかりやすいです。\nキッチン使いやすそうですね\n窓の取り方がいいと思います。',
+  'パントリーここにあるの強い',
+  'わかる、収納こわい',
+  '南向きで明るいな',
+  '動線きれいでは',
+  '玄関の靴箱だけ気になった',
+  'うち収納足りなくて後悔した\nこの量なら安心では',
+  '洗面からキッチン遠いの朝しんどいかも',
+  'WICあるの羨ましい\n廊下ちょっと長いかな',
+  'これ動線きれいでは\n玄関の靴箱だけ気になった',
+  '子ども部屋ちょっと狭い？\nリビングは広そう',
+  '家事動線ここ気になる\n朝の身支度どうする予定？',
+  'パントリーここ強い\nうち収納足りなくて後悔した\nこの量なら安心では',
+  '洗面の位置ちょっと気になる\nキッチン近いのは助かる\n窓の取り方いいな',
+  'これいいな\n階段の位置だけ迷う\n全体は住みやすそう',
+  '収納量は足りそう\n水回りまとまってるの好き\nリビング南向きなのもいい',
 ]
 
 function commentLengthMix(count: number) {
@@ -163,56 +163,52 @@ function isPoliteComment(text: string) {
   return t.includes('。')
 }
 
-function interleaveByTone(comments: string[]) {
-  const polite: string[] = []
-  const casual: string[] = []
-  for (const item of comments) {
-    if (isPoliteComment(item)) polite.push(item)
-    else casual.push(item)
+function lineCount(text: string) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean).length
+}
+
+function mixCommentsForFeed(comments: string[]) {
+  const rest = shufflePick(comments, comments.length)
+  const out: string[] = []
+  while (rest.length > 0) {
+    const last = out[out.length - 1]
+    const prev = out[out.length - 2]
+    const lastTone = last ? isPoliteComment(last) : null
+    const prevTone = prev ? isPoliteComment(prev) : null
+    const lastLines = last ? lineCount(last) : null
+    const prevLines = prev ? lineCount(prev) : null
+    let idx = rest.findIndex((item) => {
+      const tone = isPoliteComment(item)
+      const lines = lineCount(item)
+      if (lastTone != null && prevTone === lastTone && tone === lastTone) return false
+      if (lastLines != null && prevLines === lastLines && lines === lastLines) return false
+      return true
+    })
+    if (idx < 0) idx = 0
+    out.push(rest.splice(idx, 1)[0])
   }
-  const politeQ = shufflePick(polite, polite.length)
-  const casualQ = shufflePick(casual, casual.length)
-  const mixed: string[] = []
-  let politeStreak = 0
-  let casualStreak = 0
-  while (politeQ.length > 0 || casualQ.length > 0) {
-    const canPolite = politeQ.length > 0
-    const canCasual = casualQ.length > 0
-    let takePolite = canPolite
-    if (canPolite && canCasual) {
-      if (politeStreak >= 2) takePolite = false
-      else if (casualStreak >= 2) takePolite = true
-      else takePolite = Math.random() < 0.5
-    }
-    if (takePolite) {
-      mixed.push(politeQ.shift() as string)
-      politeStreak += 1
-      casualStreak = 0
-    } else {
-      mixed.push(casualQ.shift() as string)
-      casualStreak += 1
-      politeStreak = 0
-    }
-  }
-  return mixed
+  return out
 }
 
 function cleanComment(text: string) {
   const lines = String(text || '')
     .replace(/\r\n/g, '\n')
     .split('\n')
-    .map((line) => line.replace(/[ \t\u3000]+/g, '').replace(/!+/g, '！').trim())
+    .map((line) => line.replace(/[ \t\u3000]+/g, ' ').replace(/!+/g, '！').trim())
     .filter(Boolean)
     .slice(0, 3)
   if (lines.length === 0) return ''
   const compact = lines.join('')
-  if (compact.length < 8) return ''
-  if (compact.length <= 90) return lines.join('\n')
+  if (compact.length < 6) return ''
+  if (compact.length <= 110) return lines.join('\n')
   const kept: string[] = []
   let used = 0
   for (const line of lines) {
-    if (used >= 90) break
-    const next = line.slice(0, Math.max(0, 90 - used))
+    if (used >= 110) break
+    const next = line.slice(0, Math.max(0, 110 - used))
     if (next) kept.push(next)
     used += next.length
   }
@@ -244,27 +240,33 @@ async function generateWithOpenAI(args: {
   const content: Array<Record<string, unknown>> = [
     {
       type: 'text',
-      text: `間取り投稿への感想を${args.count}個作って。
-投稿者の説明・コメント（必ず内容を踏まえる）:
+      text: `X（旧Twitter）で間取り相談の投稿に返信する一般人のコメントを${args.count}個作って。
+投稿者の説明・コメント（内容を見て、全部に答えなくてよい。1点だけ拾う）:
 ${args.comment || '（説明なし）'}
-長さの内訳（必ずこの件数）:
-- ${mix.threeLine}個: 改行で3行。各行は短い一言
-- ${mix.twoLine}個: 改行で2行
-- ${mix.oneLine}個: 改行なし1行の簡単な一言（8〜22字）
+長さの内訳（必ずこの件数。配列内で1行・2行・3行を固めず混ぜる）:
+- ${mix.threeLine}個: 改行2つで必ず3行。ツイート本文を改行した感じ。各行は短くてよい
+- ${mix.twoLine}個: 改行1つで必ず2行
+- ${mix.oneLine}個: 改行なし1行（だいたい10〜28字）
 口調の内訳（必ずこの件数。長さと組み合わせてよい）:
-- ${tone.polite}個: 丁寧語。「〜の方がいいと思います。」「〜がいいですね」
-- ${tone.casual}個: ため口。「〜したら？」「〜がいいと思う」
+- ${tone.polite}個: やわらかいですます。「いいですね」「気になります」くらい。論文調の「〜の方がいいと思います。」は禁止
+- ${tone.casual}個: タイムラインの口語。「〜では」「〜かも」「うちも〜」「わかる」
 条件:
-- 1行はだいたい8〜22字。3行でも長くしすぎない
-- 画像と投稿者の説明の両方を見て書く。説明に書いてある悩みや希望には、いくつか返事する
-- 良い点か、軽い改善案
-- 同じ内容を繰り返さない。配列の順番は丁寧語とため口を交互に近い形で織り交ぜる（丁寧語を先に全部並べてからため口、は禁止）
-- 専門家っぽい堅い言い方は禁止（論文調・命令調はNG）
-- 丁寧語はですます調でやわらかく。ため口は友達に話す感じ
-- 「！」はほぼ使わない（${args.count}個のうち多くて1個）
-- 「！！」「！？」は禁止
-- 丁寧語だけ句点「。」を使ってよい。ため口は「。」なし
-JSONだけ返す: {"comments":["...", "..."]}`,
+- 専門家レビュー禁止。チェックリスト（動線→収納→LDK）で全部コメントしない
+- 1コメントは一点だけ。共感・つぶやき・自分の家の話・質問、どれか
+- 画像と説明を見て具体的な場所（洗面、パントリー、階段、窓など）に触れる
+- 同じ言い回しを繰り返さない。丁寧語とため口を配列の中で織り交ぜる
+- 「！」はほぼ使わない（${args.count}個のうち多くて1個）。「！！」「！？」禁止
+- ため口に句点「。」は使わない
+悪い例: 動線も収納もLDKも一度にレビューする
+良い例1行: パントリーここにあるの強い
+良い例2行:
+これ動線きれいでは
+玄関の靴箱だけ気になった
+良い例3行:
+パントリーここ強い
+うち収納足りなくて後悔した
+この量なら安心では
+JSONだけ返す: {"comments":["一行", "二行目1\\n二行目2", "三行1\\n三行2\\n三行3"]}`,
     },
   ]
   if (args.imageUrl) {
@@ -283,8 +285,8 @@ JSONだけ返す: {"comments":["...", "..."]}`,
     signal: AbortSignal.timeout(20000),
     body: JSON.stringify({
       model: 'gpt-4o-mini',
-      temperature: 0.9,
-      max_tokens: 1600,
+      temperature: 0.95,
+      max_tokens: 2000,
       response_format: { type: 'json_object' },
       messages: [{ role: 'user', content }],
     }),
@@ -320,7 +322,10 @@ export async function makeOfficialComments(args: {
     unique.push(item)
     if (unique.length >= wanted) break
   }
-  return { comments: interleaveByTone(limitExclamationMarks(unique)), aiCount: fromAi.length }
+  return {
+    comments: mixCommentsForFeed(limitExclamationMarks(unique)),
+    aiCount: fromAi.length,
+  }
 }
 
 export async function loadOfficialAccounts(supabase: SupabaseClient) {
@@ -373,7 +378,7 @@ export async function scheduleOfficialComments(postId: number) {
       ? [post.image_url]
       : []
   const runAts = staggerRunTimes(picked.length)
-  const fallbackOrder = interleaveByTone(FALLBACK_COMMENTS)
+  const fallbackOrder = mixCommentsForFeed(FALLBACK_COMMENTS)
   const rows = picked.map((account, index) => ({
     post_id: postId,
     account_email: account.email,
@@ -444,9 +449,11 @@ export async function postDueOfficialComments() {
     .gt('run_at', new Date().toISOString())
 
   const nickByEmail = await officialNicknamesFromUsers(supabase)
+  const idByEmail = await officialAuthIdByEmail(supabase)
   let posted = 0
   for (const job of jobs || []) {
-    const nickname = nickByEmail.get(emailKey(job.account_email)) || ''
+    const accountEmail = emailKey(job.account_email)
+    const nickname = nickByEmail.get(accountEmail) || ''
     if (!nickname) {
       await supabase
         .from('official_comment_jobs')
@@ -464,6 +471,8 @@ export async function postDueOfficialComments() {
         content: job.content,
         avatar_url: '',
         bio: '',
+        user_email: accountEmail,
+        user_id: idByEmail.get(accountEmail) || null,
       },
     ])
     if (commentError) {
